@@ -27,6 +27,8 @@ backend/.env
 backend/venv/
 backend/.venv/
 backend/**/__pycache__/
+# unit-6(REQ-006): Piper 음성모델 다운로드 캐시 + 합성된 오디오 산출물(실행 중 생성).
+backend/var/
 
 # 프론트엔드
 frontend/node_modules/

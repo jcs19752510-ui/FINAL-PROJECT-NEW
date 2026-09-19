@@ -1,0 +1,203 @@
+/* [R-01]/[R-02] 채용담당자 리포트 열람 대시보드 (unit-12, Feature F, REQ-011) */
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+
+.page h1 {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+
+.subtitle {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  margin: 0 0 24px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.table th {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.tableRow {
+  cursor: pointer;
+}
+
+.tableRow:hover {
+  background: var(--color-surface);
+}
+
+.emptyText {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  padding: 32px 0;
+  text-align: center;
+}
+
+.skeleton {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.statusTag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.detailCard {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  margin-top: 16px;
+}
+
+.detailHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.detailHeader h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.metaRow {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 16px;
+}
+
+.reportBody {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+  font-size: 14px;
+}
+
+.disclaimerBanner {
+  margin-top: 24px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.backLink {
+  display: inline-block;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+/* [R-03] 질문지/루브릭 커스터마이징 (unit-13, Feature F, REQ-014) */
+.rubricLayout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.rubricList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rubricListItem {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rubricListItem:hover {
+  background: var(--color-surface);
+}
+
+.formLabel {
+  display: block;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 16px;
+}
+
+.formInput {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+.formInputSmall {
+  composes: formInput;
+  width: 90px;
+}
+
+.criteriaHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
+
+.criteriaRow {
+  display: grid;
+  grid-template-columns: 1fr 90px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.linkButton {
+  background: none;
+  border: none;
+  color: var(--color-primary-600);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}

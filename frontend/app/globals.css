@@ -135,3 +135,311 @@ a {
   color: var(--color-text-secondary);
   text-align: center;
 }
+
+/* [C-06] 면접장(텍스트 턴 범위) — unit-4, 04-ux-design.md §2/§3 토큰 재사용 */
+.interview-room {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 96px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.interview-room__skeleton {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.interview-room__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.interview-room__header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.status-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+
+.status-badge--live {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700);
+  border-color: var(--color-primary-600);
+}
+
+.banner-info {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.interview-room__timeline {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+  overflow-y: auto;
+}
+
+.chat-empty {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  text-align: center;
+  padding: 32px 16px;
+}
+
+.chat-bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.chat-bubble--ai {
+  align-self: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.chat-bubble--user {
+  align-self: flex-end;
+  background: var(--color-primary-600);
+  color: #ffffff;
+}
+
+.chat-bubble--processing {
+  opacity: 0.75;
+}
+
+.chat-bubble__meta {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+.chat-bubble__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-stub-notice {
+  align-self: stretch;
+}
+
+.interview-room__composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-bg);
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.interview-room__composer textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  resize: vertical;
+}
+
+.interview-room__composer textarea:disabled {
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.interview-room__composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  gap: 12px;
+}
+
+.interview-room__composer-footer .submit-button {
+  width: auto;
+  padding: 10px 24px;
+}
+
+.char-counter {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.char-counter--over {
+  color: var(--color-danger-600);
+}
+
+/* [C-06] AudioRecorderControl (unit-5, 04-ux-design.md §4) — idle/recording/uploading */
+.mic-button {
+  padding: 10px 16px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mic-button:hover:not(:disabled) {
+  border-color: var(--color-primary-600);
+}
+
+.mic-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mic-button--recording {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+  border-color: var(--color-danger-600);
+}
+
+.voice-consent-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.voice-consent-prompt__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.ghost-button {
+  padding: 10px 16px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ghost-button:hover {
+  border-color: var(--color-primary-600);
+  color: var(--color-primary-700);
+}
+
+/* 04-ux-design.md [O-01] 운영자 모니터링 화면 (REQ-016) */
+.ops-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+.ops-page__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.ops-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ops-badge--error {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+}
+
+.ops-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+}
+
+@media (max-width: 800px) {
+  .ops-metric-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.ops-metric-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 88px;
+}
+
+.ops-metric-card--skeleton {
+  background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-border) 50%, var(--color-surface) 75%);
+  background-size: 200% 100%;
+  animation: ops-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ops-metric-card--skeleton {
+    animation: none;
+  }
+}
+
+@keyframes ops-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.ops-metric-card__label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.ops-metric-card__value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.ops-updated-at {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.ops-notes {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.ops-notes summary {
+  cursor: pointer;
+}
