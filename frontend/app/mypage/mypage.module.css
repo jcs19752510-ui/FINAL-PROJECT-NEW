@@ -1,0 +1,136 @@
+/* [C-13] 마이페이지 — 개인정보/동의 관리 (unit-15, REQ-030/033) */
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+
+.page h1 {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+
+.section {
+  margin-top: 32px;
+}
+
+.section h2 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+.accountCard {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  font-size: 14px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.table th {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.emptyText {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  padding: 16px 0;
+}
+
+.revokeButton {
+  padding: 6px 12px;
+  font-size: 12px;
+  border: 1px solid var(--color-danger-600);
+  color: var(--color-danger-600);
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.revokeButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.statusTag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.statusTag--active {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700, var(--color-primary-600));
+}
+
+.statusTag--revoked {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+}
+
+.statusTag--pending {
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.statusTag--completed {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700, var(--color-primary-600));
+}
+
+.deleteRequestBox {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.confirmRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.confirmRow button {
+  padding: 8px 16px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.confirmYes {
+  background: var(--color-danger-600);
+  color: #fff;
+  border: none;
+}
+
+.confirmNo {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.skeleton {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}

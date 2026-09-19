@@ -41,3 +41,22 @@ def enqueue_report_generation_job(interview_id: uuid.UUID) -> str:
     로직은 unit-10 범위다.
     """
     return str(uuid.uuid4())
+
+
+def enqueue_turn_job(interview_id: uuid.UUID, transcript_id: uuid.UUID) -> str:
+    """`POST /interviews/{id}/turns` 텍스트 제출 성공 직후 호출 (unit-4, REQ-003, §4.2/§4.3).
+
+    **스텁 경계(unit-4가 실제로 보장하는 것과 보장하지 않는 것)**: 사용자의 텍스트
+    답변은 이 함수 호출 전에 이미 `TRANSCRIPTS`(speaker=user)에 커밋되어 영구
+    저장된다 — 이는 실제로 동작한다. 이 함수는 그 뒤 `202 {job_id}` 계약을 충족시키기
+    위해 job_id만 발급하며, 실제 Redis enqueue/큐 길이(50) 초과 시 `429 QUEUE_FULL`
+    발생/AI Worker의 LLM 꼬리질문 생성은 전혀 수행하지 않는다.
+
+    따라서 이 job에 대해 WebSocket(`/ws/interviews/{id}`)으로 `queue_status`→
+    `stage_update`→`turn_result`가 순서대로 push되는 일은 **이 유닛에서는 발생하지
+    않는다** — 그 파이프라인은 unit-7(LLM)이 실제 AI Worker를 구현해야 채워지는
+    부분이다. `app/api/v1/ws.py`의 `ConnectionManager.broadcast()`가 그 워커가 호출할
+    푸시 인터페이스이며, 시그니처(`interview_id, message: dict`)는 이미 §4.3 이벤트
+    스키마 그대로 고정해두었으니 워커 구현 시 호출부만 추가하면 된다.
+    """
+    return str(uuid.uuid4())
