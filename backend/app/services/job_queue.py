@@ -15,10 +15,15 @@ Pub/Sub(`app/services/ws_publisher.py`) → `app/api/v1/ws.py`의 `redis_relay_l
 **큐 최대 길이(50, §1.3) 초과 시 `429 QUEUE_FULL`을 반환하는 로직은 아직 없다** —
 이는 REQ-038(레이트리밋, unit-8)과 겹치는 영역이라 이번 유닛에서 임의로 구현하지
 않고 그대로 인수인계한다(범위 외 확장 금지).
+
+**unit-7 재작업(DEF-008/DEC-035 Q3)**: job을 enqueue한 직후 `job_watchdog.register_job()`으로
+Redis에 감시 항목을 남긴다 — 처리 중 워커가 죽어 job이 영구 유실돼도(TC-014) 클라이언트가
+`app/services/job_watchdog.py`가 대신 발행하는 `error` 이벤트를 받게 하기 위함이다.
 """
 import uuid
 
 from app.services.celery_app import celery_app
+from app.services.job_watchdog import register_job
 
 
 def enqueue_opening_question_job(interview_id: uuid.UUID) -> str:
@@ -30,6 +35,7 @@ def enqueue_opening_question_job(interview_id: uuid.UUID) -> str:
         "app.worker.tasks.process_opening_question_job",
         args=[str(interview_id)],
     )
+    register_job(interview_id, result.id)
     return result.id
 
 
@@ -56,4 +62,5 @@ def enqueue_turn_job(interview_id: uuid.UUID, transcript_id: uuid.UUID) -> str:
         "app.worker.tasks.process_turn_job",
         args=[str(interview_id), str(transcript_id)],
     )
+    register_job(interview_id, result.id)
     return result.id

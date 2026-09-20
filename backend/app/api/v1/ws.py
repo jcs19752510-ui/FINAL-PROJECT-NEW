@@ -42,6 +42,13 @@ router = APIRouter()
 # 실행하지 않음).
 _ALLOWED_CLIENT_MESSAGE_TYPES = {"cancel_queue_wait"}
 
+# unit-7 재작업(DEF-011/DEC-035 Q2): 서버→클라이언트 이벤트 화이트리스트(§4.3).
+# `redis_relay_loop`가 dict가 아니거나(예: 정수/배열/문자열/null) `type`이 이 목록에
+# 없는 페이로드를 검증 없이 그대로 클라이언트에 중계하던 결함이 실측 확인됐다
+# (unit-7-test.md TC-044). Redis 자체를 127.0.0.1+requirepass로 잠그는 것과는 별개로,
+# 릴레이 계층에서도 최소한의 타입 검증을 둔다(방어의 다중화).
+_ALLOWED_SERVER_EVENT_TYPES = {"queue_status", "stage_update", "turn_result", "report_ready", "error"}
+
 
 class ConnectionManager:
     """단일 프로세스 전제(DEC-006/007)의 인메모리 연결 레지스트리.
@@ -114,6 +121,11 @@ async def redis_relay_loop() -> None:
                     try:
                         payload = json.loads(data)
                     except (json.JSONDecodeError, TypeError):
+                        continue
+                    if not isinstance(payload, dict) or payload.get("type") not in _ALLOWED_SERVER_EVENT_TYPES:
+                        logger.warning(
+                            "redis_relay_loop: 화이트리스트 밖 페이로드 무시 (channel=%s)", channel
+                        )
                         continue
                     await manager.broadcast(interview_id, payload)
             finally:

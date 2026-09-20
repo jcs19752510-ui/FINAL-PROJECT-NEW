@@ -81,20 +81,29 @@ def search_similar_questions(
     db: Session,
     query_text: str,
     category: QuestionCategory | None = None,
+    exclude_categories: set[QuestionCategory] | None = None,
     top_k: int = 3,
     pool_size: int = 10,
+    min_similarity: float | None = None,
 ) -> list[Question]:
     """현재 대화 맥락(query_text)과 유사한 질문은행 항목을 검색한다.
 
     LLM에게는 이 함수의 반환값(질문 텍스트)만 "읽기 전용" 컨텍스트로 주입되며,
     LLM이 직접 이 함수나 DB에 접근할 권한은 없다(03-design §6.3 도구권한 최소화,
     REQ-037 — 실제 강제는 unit-8 범위이나 이 아키텍처 자체가 그 전제를 충족한다).
+
+    `exclude_categories`/`min_similarity`는 unit-7 재작업(DEF-007)에서 추가됐다.
+    후속 질문 검색이 `opening`(오프닝 전용) 카테고리를 배제하지 않고 유사도
+    임계치도 없어, 무관한 질문이 `question_id`로 기록되는 결함이 실측으로
+    확인됐다(unit-7-test.md TC-035, k8s 질의에 opening 질문이 top3로 섞여 나옴).
     """
     query_vec = np.array(embed_text(query_text), dtype=np.float32)
 
     stmt = select(Question)
     if category is not None:
         stmt = stmt.where(Question.category == category)
+    if exclude_categories:
+        stmt = stmt.where(Question.category.notin_(exclude_categories))
     stmt = stmt.order_by(Question.embedding.cosine_distance(query_vec.tolist())).limit(pool_size)
     pool_questions = list(db.scalars(stmt).all())
     if not pool_questions:
@@ -104,6 +113,10 @@ def search_similar_questions(
     for q in pool_questions:
         vec = np.array(q.embedding, dtype=np.float32)
         similarity = float(np.dot(query_vec, vec))
+        if min_similarity is not None and similarity < min_similarity:
+            continue
         candidates.append((q, vec, similarity))
+    if not candidates:
+        return []
 
     return _mmr_select(candidates, k=min(top_k, len(candidates)))

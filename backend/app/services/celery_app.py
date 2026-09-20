@@ -13,6 +13,24 @@ from celery import Celery
 
 from app.core.config import settings
 
+# unit-7 재작업(DEF-010): 이 워커 프로세스는 `app.worker.tasks`가 직접 import하는
+# 모델(Interview/Question/Transcript)만 메타데이터에 등록해왔다. `Interview.recruiter_id`
+# 등 `users.id`를 가리키는 FK 문자열은 `users` 테이블이 `Base.metadata`에 등록되어
+# 있어야 해석되는데, 이 워커는 그 테이블을 아무도 import하지 않아 `Interview`를
+# 수정·flush하면 `NoReferencedTableError`가 발생한다(unit-7-test.md TC-042 실측,
+# 현재 워커 태스크는 Interview를 수정하지 않아 미발현이지만 unit-10 리포트 job에서
+# 발현될 잠복 결함). `alembic/env.py`와 동일한 원칙으로 모든 모델을 명시적으로
+# import해 워커 프로세스에서도 전체 메타데이터가 항상 등록되게 한다.
+from app.models.code_submission import CodeSubmission  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.consent import Consent  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.deletion_request import DeletionRequest  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.interview import Interview  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.question import Question  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.rubric_template import RubricTemplate  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.transcript import Transcript  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.user import User  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.whiteboard import WhiteboardSnapshot  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+
 celery_app = Celery(
     "ai_interview_worker",
     broker=settings.redis_url,
