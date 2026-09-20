@@ -38,13 +38,11 @@ export default function WebcamPreview({
 }: WebcamPreviewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  // autoStart면 "requesting"(또는 애초에 미지원이면 "unsupported")에서 시작한다.
-  // useEffect 안에서 동기적으로 setState를 호출하지 않기 위한 lazy-init 패턴
-  // (react-hooks/set-state-in-effect 대응, React 19 권장 방식).
-  const [status, setStatus] = useState<WebcamPreviewStatus>(() => {
-    if (!autoStart) return "off";
-    return isGetUserMediaSupported() ? "requesting" : "unsupported";
-  });
+  // 초기 상태는 서버/클라이언트에서 항상 같은 값이어야 한다(DEF-001, unit-16-test.md §6).
+  // 예전에는 여기서 isGetUserMediaSupported()를 호출해 SSR은 "unsupported", 브라우저 첫
+  // 렌더는 "requesting"이 되어 hydration mismatch 소지가 있었다. 지원 여부는 마운트 후
+  // effect에서만 판정한다.
+  const [status, setStatus] = useState<WebcamPreviewStatus>(autoStart ? "requesting" : "off");
 
   function stopStream() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -103,12 +101,15 @@ export default function WebcamPreview({
 
   useEffect(() => {
     const cancelledRef = { current: false };
-    if (autoStart && isGetUserMediaSupported()) {
+    if (autoStart) {
       // 외부 시스템(브라우저 카메라 장치)과의 동기화이지 파생 상태 계산이 아니다.
-      // getUserMedia는 본질적으로 비동기이며 응답은 항상 await 이후(마이크로태스크)에
-      // 도착하므로 실제로 렌더링 중 동기 cascading render를 유발하지 않는다.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      void acquireStream(cancelledRef);
+      // 브라우저 지원 여부는 서버에서 알 수 없어 마운트 후에야 확정할 수 있다.
+      if (isGetUserMediaSupported()) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        void acquireStream(cancelledRef);
+      } else {
+        setStatus("unsupported");
+      }
     }
     return () => {
       cancelledRef.current = true;

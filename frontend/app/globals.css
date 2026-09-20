@@ -443,3 +443,175 @@ a {
 .ops-notes summary {
   cursor: pointer;
 }
+
+/* [C-06] 보조 패널(코드/화이트보드)·웹캠 타일 배선 — unit-20, 04-ux-design.md [C-06]/§6 */
+.interview-room--split {
+  max-width: 1200px;
+}
+
+.interview-room__toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.interview-room__tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.room-tab {
+  min-height: 44px;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.room-tab:hover:not(:disabled) {
+  border-color: var(--color-primary-600);
+}
+
+/* 선택 상태를 색뿐 아니라 테두리 두께로도 구분한다(04 §5-2 색만으로 의미 전달 금지). */
+.room-tab--active {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700);
+  border-color: var(--color-primary-600);
+  box-shadow: inset 0 0 0 1px var(--color-primary-600);
+}
+
+.room-tab:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.room-tabs__note {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.interview-room__webcam {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.interview-room__webcam-toggle {
+  display: none;
+}
+
+.interview-room__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.interview-room__chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 분할 뷰: Tablet(768~1199px)은 채팅+보조패널 1:1, Desktop(≥1200px)은 60:40(04 §6). */
+.interview-room--split .interview-room__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+
+@media (min-width: 1200px) {
+  .interview-room--split .interview-room__body {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}
+
+.interview-room__subpanel {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.interview-room__subpanel[hidden] {
+  display: none;
+}
+
+.interview-room__subpanel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.interview-room__subpanel-header h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.interview-room__subpanel-header h2:focus {
+  outline: none;
+}
+
+.room-tab:focus-visible,
+.interview-room__webcam-toggle:focus-visible,
+.webcam-tile button:focus-visible,
+.interview-room__subpanel button:focus-visible,
+.interview-room__subpanel select:focus-visible,
+.interview-room__subpanel input:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Mobile(<768px): 분할 뷰 대신 전체화면 모달, 웹캠 타일은 토글로 펼침, 터치 타깃 44px(04 §5-8, §6). */
+@media (max-width: 767px) {
+  .interview-room__webcam {
+    align-items: flex-start;
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .interview-room__webcam-toggle {
+    display: inline-block;
+    min-height: 44px;
+  }
+
+  .interview-room__subpanel {
+    position: fixed;
+    inset: 0;
+    /* 데스크톱용 align-self:start가 abspos 박스를 내용 높이로 줄이므로 전체화면에서는 되돌린다. */
+    align-self: stretch;
+    z-index: 50;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+    background: var(--color-bg);
+  }
+
+  .interview-room__subpanel button,
+  .interview-room__subpanel select,
+  .webcam-tile button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

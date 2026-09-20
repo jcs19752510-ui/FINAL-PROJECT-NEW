@@ -29,9 +29,15 @@ backend/.venv/
 backend/**/__pycache__/
 # unit-6(REQ-006): Piper 음성모델 다운로드 캐시 + 합성된 오디오 산출물(실행 중 생성).
 backend/var/
+# unit-22(DEC-030): pytest 캐시
+backend/.pytest_cache/
 
 # 프론트엔드
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
 frontend/npm-debug.log*
+# unit-22(DEC-030): Playwright 산출물
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/

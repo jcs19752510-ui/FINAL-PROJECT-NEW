@@ -10,7 +10,10 @@ CODE_SUBMISSIONS/WHITEBOARD_SNAPSHOTS 모델 미생성) 이번 유닛 책임이 
 §4.2가 신설한 `GET /interviews/{id}/code-submissions`·`GET /interviews/{id}/whiteboard`는
 각각 unit-9(라이브 코딩)·unit-17(화이트보드)이 자신의 모델을 만들 때 구현한다
 (unit-3-note.md §1 참고). `GET /interviews`(목록 조회)는 여전히 이번 유닛 범위 밖이다
-(unit-2-note.md "설계서 대비 편차" §2-6 그대로 유지).
+(unit-2-note.md "설계서 대비 편차" §2-6 그대로 유지) — **unit-19가 이 갭을 메운다**(아래).
+
+범위(unit-19, Feature B, REQ-002, DEC-029): `GET /interviews`(내 면접 목록, [C-03] 지원자
+홈 전용). 03-design §4.2가 DEC-024 갭1로 신설한 엔드포인트다.
 
 범위(unit-4, Feature C, REQ-003): `POST /interviews/{id}/turns`(**텍스트 전용**, 03-design
 §4.2/§6.2 DEC-023 — 텍스트 제출은 생체정보 동의 검사와 무관하게 항상 허용). 음성
@@ -56,7 +59,13 @@ from app.models.consent import Consent, ConsentType
 from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.transcript import InputMode, Speaker, Transcript
 from app.models.user import User, UserRole
-from app.schemas.interview import InterviewDetailOut, InterviewEndResponse, InterviewOut, InterviewStartResponse
+from app.schemas.interview import (
+    InterviewDetailOut,
+    InterviewEndResponse,
+    InterviewListItemOut,
+    InterviewOut,
+    InterviewStartResponse,
+)
 from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate
 from app.services.job_queue import enqueue_opening_question_job, enqueue_report_generation_job, enqueue_turn_job
 from app.services.stt_engine import SttTranscriptionError, transcribe_audio
@@ -139,6 +148,46 @@ def create_interview(
     db.commit()
     db.refresh(interview)
     return interview
+
+
+def _to_list_item(interview: Interview) -> InterviewListItemOut:
+    return InterviewListItemOut(
+        id=interview.id,
+        status=interview.status.value,
+        report_status=interview.report_status.value,
+        started_at=interview.started_at,
+        ended_at=interview.ended_at,
+        overall_score=interview.overall_score,
+        created_at=interview.created_at,
+        resumable=interview.status in (InterviewStatus.live, InterviewStatus.paused),
+    )
+
+
+@router.get("", response_model=list[InterviewListItemOut], status_code=status.HTTP_200_OK)
+def list_my_interviews(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[InterviewListItemOut]:
+    """REQ-002(unit-19, DEC-029): 내(지원자 본인) 면접 목록 — [C-03] 지원자 홈용 (03-design §4.2).
+
+    소유자 필터는 쿼리 파라미터가 아니라 인증된 사용자 id로만 서버가 고정한다(타인 세션
+    노출 = 수평 권한 상승 방지). 면접 세션의 주체는 candidate뿐이므로(`create_interview`와
+    동일 근거, §6.1 RBAC) 그 외 역할은 403이다. 정렬은 04-ux-design [C-03] "최근 면접"에 따라
+    카드에 표시되는 일시(`started_at`, 아직 시작 전이면 `created_at`) 내림차순(동률은 id
+    내림차순으로 고정)이고, 설계서에 없는 페이지네이션/필터는 도입하지 않는다.
+    24시간을 넘긴 `live`/`paused`는 상세/재개 조회와 동일하게 이 시점에 `expired`로
+    확정해, 홈의 "진행 중 세션" 안내가 재개 불가 세션을 가리키지 않게 한다.
+    """
+    if current_user.role != UserRole.candidate:
+        raise AppError(403, "AUTH_FORBIDDEN", "Forbidden", "지원자(candidate)만 본인 면접 목록을 조회할 수 있습니다.")
+
+    stmt = (
+        select(Interview)
+        .where(Interview.candidate_id == current_user.id)
+        .order_by(func.coalesce(Interview.started_at, Interview.created_at).desc(), Interview.id.desc())
+    )
+    interviews = list(db.scalars(stmt).all())
+    return [_to_list_item(_apply_lazy_expiry(interview, db)) for interview in interviews]
 
 
 @router.post("/{interview_id}/start", response_model=InterviewStartResponse, status_code=status.HTTP_202_ACCEPTED)
