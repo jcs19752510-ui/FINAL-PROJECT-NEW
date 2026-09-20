@@ -32,7 +32,7 @@ import urllib.request
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,14 @@ _LLM_ROOT = _BACKEND_ROOT / "var" / "llm"
 _MODEL_PATH = _LLM_ROOT / "models" / "qwen2.5-1.5b-instruct-q4_k_m.gguf"
 _BIN_VULKAN = _LLM_ROOT / "bin_vulkan" / "llama-server.exe"
 _BIN_CPU = _LLM_ROOT / "bin_cpu" / "llama-server.exe"
+# DEF-009(unit-7-test.md TC-041): 워커 크래시로 llama-server 자식 프로세스가 고아로
+# 남을 수 있다(운영체제가 자식을 자동으로 정리해주지 않음, Windows에서 부모 강제
+# 종료 시 특히 그러함). ops가 사후에 수동으로 식별/정리할 수 있도록 PID를 파일로
+# 남긴다 — Job 객체 기반의 "부모 종료 시 자식 자동 종료" 보장은 pywin32/ctypes가
+# 필요한 별도 구현이라 이번 재작업 범위에서는 다루지 않는다(과설계 방지, 아래
+# `_ensure_server_running()`의 이중 기동 방지가 관측된 결함(TC-041)의 핵심 원인은
+# 이미 해소한다).
+_PID_FILE = _LLM_ROOT / "llama-server.pid"
 
 # 03-design §5.4: LLM 단계 타임아웃 25초. 서버 기동/헬스체크는 별도 예산(모델 로드
 # 1회성, §5.3과 동일 원칙 — 워커 상시 기동으로 상쇄).
@@ -72,6 +80,16 @@ class TurnLLMOutput(BaseModel):
     communication_clarity: int | None = Field(default=None, ge=1, le=5)
     key_observations: list[str] = Field(default_factory=list)
     rubric_match: dict = Field(default_factory=dict)
+
+    @field_validator("speak_text")
+    @classmethod
+    def _speak_text_must_not_be_blank(cls, v: str) -> str:
+        # DEF-006(unit-7-test.md TC-039): `min_length=1`은 공백만 있는 문자열도
+        # 통과시켜 무음/빈 발화로 이어졌다. strip 후 재검증한다.
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("speak_text는 공백만으로 구성될 수 없습니다.")
+        return stripped
 
 
 _process: subprocess.Popen | None = None
@@ -114,6 +132,10 @@ def _launch(binary: Path, n_gpu_layers: int) -> subprocess.Popen | None:
         cwd=str(binary.parent),
     )
     if _wait_for_health(proc, _SERVER_STARTUP_TIMEOUT_SECONDS):
+        try:
+            _PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+        except OSError:
+            logger.warning("llama-server PID 파일 기록 실패(치명적이지 않음)", exc_info=True)
         return proc
     proc.terminate()
     return None
@@ -133,6 +155,24 @@ def _ensure_server_running() -> None:
 
     with _process_lock:
         if _process is not None and _process.poll() is None and _health_check():
+            return
+
+        if _health_check():
+            # DEF-009(unit-7-test.md TC-041): 이 프로세스 인스턴스가 아직 서버를
+            # 기동한 적이 없는데도(예: 워커 재시작으로 `_process` 전역이 초기화된
+            # 새 프로세스) 포트가 이미 응답한다면, 이전 워커 크래시로 남은 고아
+            # llama-server이거나 다른 워커가 띄운 서버다. 새로 하나 더 띄우면
+            # Windows에서 같은 포트에 이중 바인드되어 VRAM이 중복 소모된다(실측
+            # 2,840MiB). 새 프로세스를 기동하지 않고 기존 서버를 그대로 재사용한다
+            # (이 인스턴스는 그 서버의 Popen 핸들을 갖지 못하므로 자신의 수명 동안
+            # 직접 종료할 수는 없다 — PID 파일(`_PID_FILE`)로 ops가 수동 식별 가능).
+            logger.warning(
+                "포트 %d에 이미 응답하는 llama-server가 있어 재사용합니다(신규 기동 생략, "
+                "PID 파일: %s)",
+                _SERVER_PORT,
+                _PID_FILE,
+            )
+            _active_binary = None
             return
 
         if not _MODEL_PATH.exists():
@@ -163,6 +203,10 @@ def _shutdown() -> None:
         except subprocess.TimeoutExpired:
             _process.kill()
     _process = None
+    try:
+        _PID_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _call_chat_completions(system_prompt: str, user_message: str) -> str:
