@@ -1,0 +1,431 @@
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+
+export class ApiError extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    credentials: "include", // refresh_token httpOnly 쿠키 송수신 (03-system-design.md §6.1)
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+  if (!res.ok) {
+    // RFC 7807 Problem Details (03-system-design.md §4.1)
+    const body = await res.json().catch(() => null);
+    throw new ApiError(
+      res.status,
+      body?.code ?? "UNKNOWN_ERROR",
+      body?.detail ?? "요청 처리 중 오류가 발생했습니다.",
+    );
+  }
+
+  return res.json() as Promise<T>;
+}
+
+export type UserRole = "candidate" | "recruiter";
+
+export interface UserOut {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  created_at: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: "bearer";
+  user: UserOut;
+}
+
+export function registerUser(input: {
+  email: string;
+  password: string;
+  name: string;
+  role: UserRole;
+}): Promise<UserOut> {
+  return request<UserOut>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function loginUser(input: { email: string; password: string }): Promise<TokenResponse> {
+  return request<TokenResponse>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getMe(accessToken: string): Promise<UserOut> {
+  return request<UserOut>("/auth/me", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export interface InterviewOut {
+  id: string;
+  candidate_id: string;
+  recruiter_id: string | null;
+  rubric_template_id: string | null;
+  status: "scheduled" | "live" | "paused" | "completed" | "expired";
+  report_status: "none" | "queued" | "ready" | "failed";
+  started_at: string | null;
+  ended_at: string | null;
+  overall_score: string | null;
+  created_at: string;
+}
+
+export interface InterviewDetailOut extends InterviewOut {
+  resumable: boolean;
+}
+
+export interface TranscriptOut {
+  id: string;
+  interview_id: string;
+  question_id: string | null;
+  turn_index: number;
+  speaker: "ai" | "user";
+  input_mode: "text" | "voice";
+  content_text: string;
+  audio_ref: string | null;
+  created_at: string;
+}
+
+// 03-system-design.md §4.2: POST /interviews/{id}/turns -> 202 {job_id}
+export interface TurnAcceptedResponse {
+  job_id: string;
+}
+
+export function getInterview(accessToken: string, interviewId: string): Promise<InterviewDetailOut> {
+  return request<InterviewDetailOut>(`/interviews/${interviewId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function listTranscripts(accessToken: string, interviewId: string): Promise<TranscriptOut[]> {
+  return request<TranscriptOut[]>(`/interviews/${interviewId}/transcripts`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// REQ-003(unit-4): 텍스트 턴만 지원. 음성(multipart) 제출은 unit-5 범위.
+export function submitTextTurn(
+  accessToken: string,
+  interviewId: string,
+  text: string,
+): Promise<TurnAcceptedResponse> {
+  return request<TurnAcceptedResponse>(`/interviews/${interviewId}/turns`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ text }),
+  });
+}
+
+// REQ-004/REQ-005(unit-5): 음성(multipart) 턴 제출. 03-system-design.md §4.2/§4.3 —
+// 텍스트와 동일한 `/turns` 경로를 `Content-Type: multipart/form-data`로 호출한다.
+// `request()` 공통 헬퍼는 항상 `Content-Type: application/json`을 강제 부착하므로
+// (line 19) 이 함수는 그 헬퍼를 쓰지 않고 fetch를 직접 호출해 브라우저가 FormData의
+// boundary를 포함한 Content-Type을 스스로 설정하게 한다. DEC-023: `biometric_voice`
+// 동의가 없거나 철회된 상태면 서버가 `403 CONSENT_REQUIRED_VOICE`를 반환한다.
+export async function submitVoiceTurn(
+  accessToken: string,
+  interviewId: string,
+  audioBlob: Blob,
+): Promise<TurnAcceptedResponse> {
+  const formData = new FormData();
+  formData.append("audio", audioBlob, "answer.webm");
+
+  const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/turns`, {
+    method: "POST",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(
+      res.status,
+      body?.code ?? "UNKNOWN_ERROR",
+      body?.detail ?? "요청 처리 중 오류가 발생했습니다.",
+    );
+  }
+  return res.json() as Promise<TurnAcceptedResponse>;
+}
+
+// 03-system-design.md §4.3: WS는 `/api/v1` 프리픽스 없이 `/ws/interviews/{id}`이며,
+// 토큰은 Authorization 헤더 대신 쿼리 파라미터로 전달한다(브라우저 WebSocket API가
+// 커스텀 헤더를 지원하지 않음, backend/app/api/v1/ws.py 참고).
+export function interviewWsUrl(interviewId: string, accessToken: string): string {
+  const httpBase = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
+  const wsBase = httpBase.replace(/^http/, "ws");
+  return `${wsBase}/ws/interviews/${interviewId}?token=${encodeURIComponent(accessToken)}`;
+}
+
+const ACCESS_TOKEN_KEY = "access_token";
+
+export function storeAccessToken(token: string) {
+  sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+}
+
+export function readAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return sessionStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function clearAccessToken() {
+  sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+}
+
+// REQ-016(unit-18): 03-system-design.md §4.2/§7.2, 04-ux-design.md [O-01].
+export interface OpsHealthOut {
+  queue_length: number;
+  gpu_memory_used_bytes: number;
+  error_rate: number;
+  active_sessions: number;
+  checked_at: string;
+  notes: Record<string, string>;
+}
+
+export function getOpsHealth(accessToken: string): Promise<OpsHealthOut> {
+  return request<OpsHealthOut>("/ops/health", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// REQ-011(unit-12): 03-system-design.md §4.2 `/recruiter/reports`, 04-ux-design.md
+// [R-01]/[R-02]. EVALUATION_REPORTS가 아직 없어(Feature E 미구현) 리포트 상세는
+// `report_available`/`message`로만 상태를 알려준다 — 가짜 점수/추천등급 필드 없음.
+export interface RecruiterInterviewListItemOut {
+  interview_id: string;
+  candidate_name: string;
+  candidate_email: string;
+  status: "scheduled" | "live" | "paused" | "completed" | "expired";
+  report_status: "none" | "queued" | "ready" | "failed";
+  started_at: string | null;
+  ended_at: string | null;
+  overall_score: string | null;
+}
+
+export interface RecruiterReportDetailOut extends RecruiterInterviewListItemOut {
+  report_available: boolean;
+  message: string;
+}
+
+export function getRecruiterReports(accessToken: string): Promise<RecruiterInterviewListItemOut[]> {
+  return request<RecruiterInterviewListItemOut[]>("/recruiter/reports", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function getRecruiterReportDetail(
+  accessToken: string,
+  interviewId: string,
+): Promise<RecruiterReportDetailOut> {
+  return request<RecruiterReportDetailOut>(`/recruiter/reports/${interviewId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// REQ-002(unit-2)/REQ-031~034(unit-15): 03-system-design.md §4.2 `POST /interviews`,
+// `POST /interviews/{id}/start`. [C-04] 사전고지·동의 화면이 세션을 만들고 시작하는 데
+// 사용한다. `interviews.py` 자체는 unit-2/3/4 소유라 수정하지 않고, 이 함수는 그 API를
+// 그대로 소비만 한다.
+export function createInterview(accessToken: string): Promise<InterviewOut> {
+  return request<InterviewOut>("/interviews", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// REQ-002(unit-19): 03-system-design.md §4.2 `GET /interviews`(내 면접 목록, DEC-024
+// 갭1)와 04-ux-design.md [C-03] 지원자 홈이 소비한다. candidate 전용(그 외 역할은 403).
+export interface InterviewListItemOut {
+  id: string;
+  status: InterviewOut["status"];
+  report_status: InterviewOut["report_status"];
+  started_at: string | null;
+  ended_at: string | null;
+  overall_score: string | null;
+  created_at: string;
+  resumable: boolean;
+}
+
+export function listMyInterviews(accessToken: string): Promise<InterviewListItemOut[]> {
+  return request<InterviewListItemOut[]>("/interviews", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export interface InterviewStartResponse {
+  job_id: string;
+  message: string;
+  interview: InterviewOut;
+}
+
+export function startInterview(accessToken: string, interviewId: string): Promise<InterviewStartResponse> {
+  return request<InterviewStartResponse>(`/interviews/${interviewId}/start`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// REQ-029~034(unit-15, Feature G): backend/app/api/v1/consents.py(unit-14)를 그대로
+// 소비한다 — 이 파일은 절대 수정하지 않는다. 필드명은 backend/app/schemas/consent.py와
+// 1:1 대응.
+export type ConsentType = "ai_interview_notice" | "biometric_voice";
+
+export interface ConsentOut {
+  id: string;
+  consent_type: ConsentType;
+  granted_at: string;
+  revoked_at: string | null;
+}
+
+export function createConsent(accessToken: string, consentType: ConsentType): Promise<ConsentOut> {
+  return request<ConsentOut>("/consents", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ consent_type: consentType }),
+  });
+}
+
+export function revokeConsent(accessToken: string, consentId: string): Promise<ConsentOut> {
+  return request<ConsentOut>(`/consents/${consentId}/revoke`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function listMyConsents(accessToken: string): Promise<ConsentOut[]> {
+  return request<ConsentOut[]>("/users/me/consents", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export type DeletionTarget = "biometric_only" | "full_account";
+export type DeletionRequestStatus = "pending" | "completed";
+
+export interface DeletionRequestOut {
+  id: string;
+  target: DeletionTarget;
+  status: DeletionRequestStatus;
+  requested_at: string;
+  completed_at: string | null;
+}
+
+export function requestBiometricDataDeletion(accessToken: string): Promise<DeletionRequestOut> {
+  return request<DeletionRequestOut>("/users/me/biometric-data", {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function listMyDeletionRequests(accessToken: string): Promise<DeletionRequestOut[]> {
+  return request<DeletionRequestOut[]>("/users/me/deletion-requests", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// REQ-017(unit-17): 03-system-design.md v2 §4.2 `PUT`/`GET /interviews/{id}/whiteboard`,
+// 04-ux-design.md [C-08]. DEC-008 — AI 자동분석 없는 순수 드로잉 데이터(스트로크
+// 좌표 배열)만 다룬다.
+export interface WhiteboardPoint {
+  x: number;
+  y: number;
+}
+
+export interface WhiteboardStroke {
+  points: WhiteboardPoint[];
+  color: string;
+  width: number;
+}
+
+export interface WhiteboardSnapshotOut {
+  id: string;
+  interview_id: string;
+  strokes: WhiteboardStroke[];
+  created_at: string;
+}
+
+export function saveWhiteboard(
+  accessToken: string,
+  interviewId: string,
+  strokes: WhiteboardStroke[],
+): Promise<WhiteboardSnapshotOut> {
+  return request<WhiteboardSnapshotOut>(`/interviews/${interviewId}/whiteboard`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ strokes }),
+  });
+}
+
+export function getWhiteboard(
+  accessToken: string,
+  interviewId: string,
+): Promise<WhiteboardSnapshotOut | null> {
+  return request<WhiteboardSnapshotOut | null>(`/interviews/${interviewId}/whiteboard`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// REQ-014(unit-13): 03-system-design.md §3.1(RUBRIC_TEMPLATES)/§4.2
+// `/recruiter/rubric-templates`, 04-ux-design.md [R-03]. `recruiter_id`가 null이면
+// 시스템 기본 템플릿(모든 recruiter가 조회 가능, 직접 수정은 불가 — 복사해서 새로
+// 만들어야 함).
+export interface RubricCriterion {
+  name: string;
+  weight: number;
+  description: string;
+}
+
+export interface RubricTemplateOut {
+  id: string;
+  recruiter_id: string | null;
+  name: string;
+  criteria: RubricCriterion[];
+  is_system_default: boolean;
+  created_at: string;
+}
+
+export function listRubricTemplates(accessToken: string): Promise<RubricTemplateOut[]> {
+  return request<RubricTemplateOut[]>("/recruiter/rubric-templates", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function createRubricTemplate(
+  accessToken: string,
+  input: { name: string; criteria: RubricCriterion[] },
+): Promise<RubricTemplateOut> {
+  return request<RubricTemplateOut>("/recruiter/rubric-templates", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateRubricTemplate(
+  accessToken: string,
+  templateId: string,
+  input: { name?: string; criteria?: RubricCriterion[] },
+): Promise<RubricTemplateOut> {
+  return request<RubricTemplateOut>(`/recruiter/rubric-templates/${templateId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}

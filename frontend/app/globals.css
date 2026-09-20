@@ -1,0 +1,617 @@
+/* 04-ux-design.md §3.1/§3.2/§3.3 최소 토큰 세트 (라이트 테마 단일) */
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f7f8fa;
+  --color-border: #d8dce3;
+  --color-text-primary: #1a1d23;
+  --color-text-secondary: #545b66;
+  --color-primary-600: #2e5aac;
+  --color-primary-700: #24478a;
+  --color-primary-100: #e8eefa;
+  --color-danger-600: #c22a2a;
+  --color-danger-100: #fbe7e7;
+  --color-focus-ring: #1456d6;
+  --radius-md: 8px;
+  --radius-sm: 4px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+a {
+  color: var(--color-primary-600);
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 32px 24px;
+}
+
+.auth-card h1 {
+  font-size: 24px;
+  margin: 0 0 24px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field label {
+  display: block;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.field input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
+.field input:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.field-error {
+  color: var(--color-danger-600);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.role-group {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.role-group label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+}
+
+.submit-button {
+  width: 100%;
+  padding: 12px;
+  background: var(--color-primary-600);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.submit-button:hover {
+  background: var(--color-primary-700);
+}
+
+.submit-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.banner-error {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.auth-footer {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+/* [C-06] 면접장(텍스트 턴 범위) — unit-4, 04-ux-design.md §2/§3 토큰 재사용 */
+.interview-room {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 96px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.interview-room__skeleton {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.interview-room__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.interview-room__header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.status-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+
+.status-badge--live {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700);
+  border-color: var(--color-primary-600);
+}
+
+.banner-info {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.interview-room__timeline {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+  overflow-y: auto;
+}
+
+.chat-empty {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  text-align: center;
+  padding: 32px 16px;
+}
+
+.chat-bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.chat-bubble--ai {
+  align-self: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.chat-bubble--user {
+  align-self: flex-end;
+  background: var(--color-primary-600);
+  color: #ffffff;
+}
+
+.chat-bubble--processing {
+  opacity: 0.75;
+}
+
+.chat-bubble__meta {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+.chat-bubble__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-stub-notice {
+  align-self: stretch;
+}
+
+.interview-room__composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-bg);
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.interview-room__composer textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  resize: vertical;
+}
+
+.interview-room__composer textarea:disabled {
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.interview-room__composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  gap: 12px;
+}
+
+.interview-room__composer-footer .submit-button {
+  width: auto;
+  padding: 10px 24px;
+}
+
+.char-counter {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.char-counter--over {
+  color: var(--color-danger-600);
+}
+
+/* [C-06] AudioRecorderControl (unit-5, 04-ux-design.md §4) — idle/recording/uploading */
+.mic-button {
+  padding: 10px 16px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mic-button:hover:not(:disabled) {
+  border-color: var(--color-primary-600);
+}
+
+.mic-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mic-button--recording {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+  border-color: var(--color-danger-600);
+}
+
+.voice-consent-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.voice-consent-prompt__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.ghost-button {
+  padding: 10px 16px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ghost-button:hover {
+  border-color: var(--color-primary-600);
+  color: var(--color-primary-700);
+}
+
+/* 04-ux-design.md [O-01] 운영자 모니터링 화면 (REQ-016) */
+.ops-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+.ops-page__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.ops-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ops-badge--error {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+}
+
+.ops-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+}
+
+@media (max-width: 800px) {
+  .ops-metric-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.ops-metric-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 88px;
+}
+
+.ops-metric-card--skeleton {
+  background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-border) 50%, var(--color-surface) 75%);
+  background-size: 200% 100%;
+  animation: ops-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ops-metric-card--skeleton {
+    animation: none;
+  }
+}
+
+@keyframes ops-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.ops-metric-card__label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.ops-metric-card__value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.ops-updated-at {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.ops-notes {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.ops-notes summary {
+  cursor: pointer;
+}
+
+/* [C-06] 보조 패널(코드/화이트보드)·웹캠 타일 배선 — unit-20, 04-ux-design.md [C-06]/§6 */
+.interview-room--split {
+  max-width: 1200px;
+}
+
+.interview-room__toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.interview-room__tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.room-tab {
+  min-height: 44px;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.room-tab:hover:not(:disabled) {
+  border-color: var(--color-primary-600);
+}
+
+/* 선택 상태를 색뿐 아니라 테두리 두께로도 구분한다(04 §5-2 색만으로 의미 전달 금지). */
+.room-tab--active {
+  background: var(--color-primary-100);
+  color: var(--color-primary-700);
+  border-color: var(--color-primary-600);
+  box-shadow: inset 0 0 0 1px var(--color-primary-600);
+}
+
+.room-tab:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.room-tabs__note {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.interview-room__webcam {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.interview-room__webcam-toggle {
+  display: none;
+}
+
+.interview-room__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.interview-room__chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 분할 뷰: Tablet(768~1199px)은 채팅+보조패널 1:1, Desktop(≥1200px)은 60:40(04 §6). */
+.interview-room--split .interview-room__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+
+@media (min-width: 1200px) {
+  .interview-room--split .interview-room__body {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}
+
+.interview-room__subpanel {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.interview-room__subpanel[hidden] {
+  display: none;
+}
+
+.interview-room__subpanel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.interview-room__subpanel-header h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.interview-room__subpanel-header h2:focus {
+  outline: none;
+}
+
+.room-tab:focus-visible,
+.interview-room__webcam-toggle:focus-visible,
+.webcam-tile button:focus-visible,
+.interview-room__subpanel button:focus-visible,
+.interview-room__subpanel select:focus-visible,
+.interview-room__subpanel input:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Mobile(<768px): 분할 뷰 대신 전체화면 모달, 웹캠 타일은 토글로 펼침, 터치 타깃 44px(04 §5-8, §6). */
+@media (max-width: 767px) {
+  .interview-room__webcam {
+    align-items: flex-start;
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .interview-room__webcam-toggle {
+    display: inline-block;
+    min-height: 44px;
+  }
+
+  .interview-room__subpanel {
+    position: fixed;
+    inset: 0;
+    /* 데스크톱용 align-self:start가 abspos 박스를 내용 높이로 줄이므로 전체화면에서는 되돌린다. */
+    align-self: stretch;
+    z-index: 50;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+    background: var(--color-bg);
+  }
+
+  .interview-room__subpanel button,
+  .interview-room__subpanel select,
+  .webcam-tile button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

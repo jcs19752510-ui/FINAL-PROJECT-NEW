@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI의 Depends(...)를 인자 기본값으로 쓰는 것은 프레임워크 공식 권장 패턴이므로 예외 처리
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+# 서버를 자동 기동하지 않는다 — 실행 방법은 docs/harness/test-infra.md
+testpaths = ["tests"]
