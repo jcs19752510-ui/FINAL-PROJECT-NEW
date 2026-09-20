@@ -70,6 +70,7 @@ from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCrea
 from app.services.job_queue import enqueue_opening_question_job, enqueue_report_generation_job, enqueue_turn_job
 from app.services.stt_engine import SttTranscriptionError, transcribe_audio
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
+from app.services.turn_numbering import insert_transcript_with_retry
 
 # unit-5: 설계서에 명시되지 않은 구현 세부값(비가역성 낮음, 상수 하나로 격리). 음성
 # 답변 하나가 이 크기를 넘으면 422로 거부해 대용량 업로드로 메모리를 소모하지 않게
@@ -339,26 +340,26 @@ def _ensure_turn_submittable(interview: Interview, db: Session) -> Interview:
     return interview
 
 
-def _next_turn_index(interview: Interview, db: Session) -> int:
-    return db.scalar(select(func.count()).select_from(Transcript).where(Transcript.interview_id == interview.id))
-
-
 def _submit_text_turn(interview: Interview, payload: TurnCreate, db: Session) -> TurnAcceptedResponse:
     """REQ-003: 텍스트 턴 제출 (03-design §4.2/§4.3).
 
     DEC-023: 텍스트(`input_mode=text`) 제출은 `biometric_voice` 동의 검사와 무관하게
     항상 허용한다 — 이 검사는 음성(multipart) 제출(`_submit_voice_turn`)에만 적용된다.
+
+    턴 채번은 `app/services/turn_numbering.py`(DEF-002/DEC-035 Q5, `(interview_id,
+    turn_index)` 유니크 제약 + 재시도)로 통일한다.
     """
-    transcript = Transcript(
-        interview_id=interview.id,
-        turn_index=_next_turn_index(interview, db),
-        speaker=Speaker.user,
-        input_mode=InputMode.text,
-        content_text=payload.text,
+    transcript = insert_transcript_with_retry(
+        db,
+        interview.id,
+        lambda turn_index: Transcript(
+            interview_id=interview.id,
+            turn_index=turn_index,
+            speaker=Speaker.user,
+            input_mode=InputMode.text,
+            content_text=payload.text,
+        ),
     )
-    db.add(transcript)
-    db.commit()
-    db.refresh(transcript)
 
     job_id = enqueue_turn_job(interview.id, transcript.id)
     return TurnAcceptedResponse(job_id=job_id)
@@ -429,17 +430,18 @@ async def _submit_voice_turn(
             "음성에서 텍스트를 인식하지 못했습니다. 다시 녹음해주세요.",
         )
 
-    transcript = Transcript(
-        interview_id=interview.id,
-        turn_index=_next_turn_index(interview, db),
-        speaker=Speaker.user,
-        input_mode=InputMode.voice,
-        content_text=text,
-        audio_ref=None,
+    transcript = insert_transcript_with_retry(
+        db,
+        interview.id,
+        lambda turn_index: Transcript(
+            interview_id=interview.id,
+            turn_index=turn_index,
+            speaker=Speaker.user,
+            input_mode=InputMode.voice,
+            content_text=text,
+            audio_ref=None,
+        ),
     )
-    db.add(transcript)
-    db.commit()
-    db.refresh(transcript)
 
     job_id = enqueue_turn_job(interview.id, transcript.id)
     return TurnAcceptedResponse(job_id=job_id)

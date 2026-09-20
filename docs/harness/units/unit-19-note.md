@@ -164,3 +164,81 @@ API(curl 대신 임시 파이썬 스크립트, 정확한 상태 확인):
 - "구현 상태" 끝의 `**[v3]** unit-19 신규 배정(미착수).`를 다음 문자열로 교체:
   `**[v3]** unit-19 구현 완료(05단계, L3, 06 대기): backend/app/api/v1/interviews.py GET /api/v1/interviews(내 면접 목록 — candidate 전용·본인 세션만·COALESCE(started_at,created_at) 내림차순·비-candidate 403·24h 경과 live/paused lazy expiry, 응답 InterviewListItemOut은 backend/app/schemas/interview.py) + [C-03] 지원자 홈(frontend/app/page.tsx, frontend/components/CandidateHome.tsx/.module.css; 최근 면접 카드·resumable(live|paused) 중단 배너·리포트 준비 완료 배지·로딩/빈/에러 상태, 홈 하이드레이션 #418 수정). 리포트 배지의 링크·failed 재시도 CTA는 [C-10]/[C-11](unit-10/11) 범위. 자체 확인: API 점검 전부·브라우저 33항목 통과, 상세 unit-19-note.md`
 - 비고: 설계 대비 편차 3건(배너=resumable 해석, 비-candidate 403, 무페이지네이션+UI 10건 표시)은 `unit-19-note.md` §3·§5 참조.
+
+## DEF-001 재작업 (05단계, 2026-09-20, DEF-001 소규모 재작업 — 신규 unit 아님)
+
+- 작성 에이전트: `05-unit-developer` (재작업, unit-19 범위 부속 수정)
+- **속도 트랙: L3(일반)** — unit-19 자체 트랙(DEC-031)을 그대로 승계. 이 재작업도 05→06→(07 회귀 스윕)의 L3 정식 절차를 따른다.
+- 대상 결함: `docs/harness/units/unit-19-test.md` §6 DEF-001. `[C-03]` 홈 헤더(`<h1>{user.name}님, 환영합니다`)가 공백 없는 100자 이름(백엔드 `backend/app/schemas/user.py:11`의 `max_length=100` 경계값)에서 줄바꿈되지 않아 390px 뷰포트에서 페이지 전체 가로 스크롤 발생.
+
+### 무엇을 바꿨는가
+
+`frontend/components/CandidateHome.module.css`의 `.header h1` 규칙에 2줄 추가(그 외 파일 무변경):
+
+```css
+.header h1 {
+  font-size: 24px;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+```
+
+- `overflow-wrap: anywhere`: 공백 등 통상적인 줄바꿈 지점이 없는 긴 텍스트도 필요하면 글자 단위로 줄바꿈을 허용한다.
+- `min-width: 0`: `.header`가 `display: flex`이고 `h1`이 그 자식(flex item)이라, flex item의 기본 `min-width: auto`(내용의 min-content 크기)가 줄바꿈 허용 여부와 무관하게 컨테이너 밖으로 넘치는 것을 막는 근본 원인이었다. `overflow-wrap`만 추가하면 브라우저에 따라 min-content 계산에 반영되지 않아 flex 컨테이너 안에서 여전히 넘칠 수 있어(특히 `word-break: break-word`는 스펙상 min-content 축소에 반영되지 않는 것으로 알려져 있음), `min-width: 0`을 함께 지정해 flex item이 부모 너비까지 확실히 줄어들 수 있게 했다.
+
+### 왜 이 방식(줄바꿈)을 택했는가 — 말줄임(ellipsis)과 비교한 근거
+
+1. **이 코드베이스에 확립된 관례가 이미 "줄바꿈 허용"이다.** `frontend/app/globals.css:239-242`의 `.chat-bubble__text`가 긴 텍스트(사용자 답변)를 `white-space: pre-wrap; word-break: break-word;`로 처리한다. 저장소 전체(`grep`)에 `text-overflow: ellipsis`나 `title=` 속성을 쓴 말줄임 패턴은 단 한 곳도 없다. "다른 화면에 동일 패턴(긴 텍스트 헤더)이 있으면 그 관례를 따른다"는 지시에 따라 줄바꿈을 선택했다.
+2. **`04-ux-design.md` §5(접근성)·§6(반응형)의 원칙과 더 잘 맞는다.** §5-9는 정보를 숨기지 않고 대체 경로로 항상 제공하는 것을 원칙으로 삼고(예: 텍스트 대체 입력 경로, 자막), 반응형 기준(294행)은 "200% 확대 시에도 레이아웃 깨짐 없어야 함"을 요구한다. 이름은 사용자가 직접 입력한 자신의 정보이자 "환영합니다" 인사의 일부라 일부를 가리는 것(ellipsis)은 굳이 감출 이유가 없는 정보를 숨기는 셈이고, 04 어디에도 이 화면에서 말줄임+`title` 보완을 요구하는 근거가 없다.
+3. **`title` 속성 보완이 필요 없다.** ellipsis를 선택했다면 스크린리더/마우스 오버 사용자를 위해 `title` 전체 이름 보완이 필요했겠지만, 줄바꿈은 시각적으로도 전체 텍스트가 그대로 보이므로 추가 접근성 보완 장치가 필요 없다(구현이 더 단순하고 회귀 위험이 적음).
+4. 설계서(03/04)에 이 경계값(100자 무공백)에 대한 명시적 처리 방침이 없어 05/04 판단으로 위임된 사안이었다(오케스트레이터 지시문 확인). 위 근거들이 한 방향으로 일관되게 모여 규칙 A로 질문할 만큼 해석이 갈리는 사안은 아니라고 판단했다.
+
+### 직접 확인한 결과
+
+`.harness-tmp/next.lock`이 이 작업 시점에 unit-20의 06단계(`owner=06-unit-tester(unit-20)`, 활성 프로세스 확인됨)가 보유 중이어서, 지시문의 "다른 병렬 유닛의 next.lock/포트를 건드리지 말라"를 지키기 위해 `next build`/`next dev`를 새로 띄우지 않았다. 대신 **동일한 CSS 파일을 실제 브라우저(Playwright Chromium, 저장소 `frontend/node_modules/playwright-core` 재사용, 별도 패키지 설치 없음)에 그대로 로드하는 격리된 정적 HTML 재현**으로 확인했다(스크래치패드에서만 생성, 저장소·`.harness-tmp` 무접촉, 프로세스는 검증 즉시 종료돼 PID 기록 대상 없음):
+
+- `frontend/e2e/unit-19/home-a11y.spec.ts`의 `[AC-F13+] 긴 이름(100자, 공백 없음/한글)` 케이스와 동일한 두 입력값(`"A".repeat(100)`, `"가나다라".repeat(25)`)과 동일한 판정식(`document.documentElement.scrollWidth <= clientWidth`, 뷰포트 390×844)을 사용.
+- `CandidateHome.tsx`의 실제 헤더 마크업(`<main class="page"><header class="header"><h1>...</h1><nav class="nav">...</nav></header></main>`)을 그대로 재현하고, `frontend/app/globals.css`(`*{box-sizing:border-box}`, body 리셋)를 실제 파일 그대로 `<link>`로 로드.
+- **수정 전(원래 `.header h1` 규칙) vs 수정 후(이번 2줄 추가) 비교**:
+  - `"A".repeat(100)`(공백 없음): 수정 전 `scrollWidth=1739 > clientWidth=390`(가로 스크롤 발생, DEF-001 재현) → 수정 후 `scrollWidth=390 = clientWidth=390`(가로 스크롤 없음, 해결 확인).
+  - `"가나다라".repeat(25)`(한글 100자): 수정 전부터 `scrollWidth=390 = clientWidth=390`으로 넘치지 않았음(Chromium이 CJK 문자 사이를 기본 줄바꿈 지점으로 취급하기 때문으로 보임 — `overflow-wrap` 유무와 무관하게 이미 정상이었다는 뜻이며, 이번 수정이 이 케이스에 새로운 영향을 주지 않음을 확인). 수정 후도 동일하게 정상.
+  - 추가로 `h1`의 `boundingBox()`(수정 후, `"A"*100` 입력)를 측정해 `width=358(390px 뷰포트 내부 패딩 반영), height=216`(줄바꿈으로 여러 줄이 됐음, 1줄이면 약 36px)임을 확인했고, `nav`(마이페이지/로그아웃)가 여전히 `isVisible()=true`로 남아 헤더의 다른 요소를 밀어내거나 가리지 않음을 확인했다.
+- **한계(투명하게 기록)**: 이는 실제 앱을 통한 `home-a11y.spec.ts` 자동화 테스트 실행이 아니라, 동일 CSS 파일·동일 마크업·동일 판정식을 쓴 격리된 재현이다. next.lock을 다른 유닛이 보유 중이라 이번 05 재작업 세션에서는 실제 앱 기동을 통한 전량 재실행을 하지 않았다. **07의 회귀 스윕(또는 06이 next.lock을 확보할 수 있는 시점)에서 `frontend/e2e/unit-19/home-a11y.spec.ts` 전체(특히 이 케이스)를 공식적으로 재실행해 최종 확인해야 한다** — 오케스트레이터 지시문에도 이미 이렇게 명시되어 있다.
+
+### 게이트 1 — 정적 분석/린트
+
+- 변경 파일이 `.css` 1개뿐이다. 이 저장소에는 CSS 전용 정적 분석 도구(stylelint 등)가 설정되어 있지 않다(`package.json`에 `stylelint` 없음, `stylelint` 설정 파일 없음) — **설정 자체가 없음을 사실대로 기록**.
+- 확인을 위해 `npx eslint components/CandidateHome.module.css`를 실행한 결과 `File ignored because no matching configuration was supplied`(0 errors, 1 warning) — ESLint 설정이 `.css` 확장자에 매칭되는 규칙을 갖고 있지 않음을 실측 확인. 즉 이 파일 변경에 적용되는 린트 게이트는 존재하지 않는다(건너뛴 것이 아니라 없는 것).
+- JS/TS 파일을 건드리지 않았으므로 `tsc --noEmit`/`npm run build`는 이번 변경으로 영향받지 않는다(재실행하지 않음 — next.lock 미보유 이유는 위와 동일. 07 회귀 스윕에서 함께 확인됨).
+
+### 게이트 2 — 자체 코드 리뷰 체크리스트
+
+- [x] **설계서/디자인서 명세와 실제 구현 일치** — 04-ux-design.md에 이 경계값에 대한 명시적 규정이 없어 05/04 판단으로 위임된 사안이며, 위 "왜 이 방식을 택했는가"에서 근거를 남겼다. 03-system-design.md는 이 화면의 CSS 세부사항을 규정하지 않아 영향 없음.
+- [x] **에러 처리 누락 경로 없음** — 순수 CSS 규칙 추가이며 분기/예외 처리 대상 로직이 없다.
+- [x] **입력값 검증(시스템 경계)** — 해당 없음(CSS는 사용자 입력이나 외부 API 응답을 직접 다루지 않는다. 100자 무공백 이름 자체의 서버측 검증은 `backend/app/schemas/user.py`의 기존 `max_length=100`이 이미 담당하며 이번 변경 대상이 아니다).
+- [x] **하드코딩된 시크릿/자격증명 없음**.
+- [x] **신규 외부 의존성 없음** — `package.json`/`requirements*.txt` 무변경. 확인에 사용한 `playwright-core`는 이미 저장소에 설치돼 있던 기존 의존성을 재사용했을 뿐 새로 추가하지 않았다(`npm install` 실행 안 함).
+- [x] **범위 외 변경 없음** — `git status --short` 확인 결과 이번 세션에서 변경된 파일은 `frontend/components/CandidateHome.module.css` 단 하나(그 외 파일은 병렬 유닛/기존 변경분, 아래 Teardown 참고).
+
+### 6단계 테스터를 위한 인수 조건 (AC-DEF001)
+
+| # | 절차 | 기대 결과 |
+|---|---|---|
+| AC-DEF001-1 | `frontend/e2e/unit-19/home-a11y.spec.ts`의 `[AC-F13+] 긴 이름(100자, 공백 없음/한글)에도 390px 에서 가로 스크롤이 생기지 않는다` 테스트를 재실행 | 두 이름(`"A".repeat(100)`, `"가나다라".repeat(25)`) 모두 PASS(`dims.sw <= dims.cw`) |
+| AC-DEF001-2 | 같은 파일의 나머지 7개 AC-F13/AC-F13+ 케이스(Tab 순서·에러 포커스·390px 일반·320px·랜드마크·색대비·색외 라벨·reduced-motion·확대 겹침) 재실행 | 전부 기존과 동일하게 PASS(회귀 없음 — CSS 변경이 `h1` 외 요소나 레이아웃 순서에 영향을 주지 않았음을 확인) |
+| AC-DEF001-3 | 100자 이름으로 로그인 후 390px에서 헤더 시각 확인(스크린샷 또는 devtools) | `h1`이 여러 줄로 줄바꿈되어 전체 텍스트가 보이고, `nav`(마이페이지/로그아웃)가 가려지거나 겹치지 않음 |
+| AC-DEF001-4 | `home.spec.ts`/`home-states.spec.ts` 등 unit-19의 나머지 스펙(이 CSS와 무관) | 영향 없음 — 회귀 없음 예상(변경 파일이 `.header h1` 1개 선택자로 국한) |
+
+### traceability.md / unit-19-test.md에 반영할 제안 문구 (오케스트레이터가 반영 — 이 재작업은 두 문서를 직접 수정하지 않음)
+
+- `unit-19-test.md` §6 DEF-001 "상태" 컬럼: `Open` → `Fixed(05 재작업 완료, 07 회귀 스윕에서 공식 재검증 예정)`로 변경 제안.
+- `unit-19-test.md` §6 DEF-001 "조치 내용": 위 "무엇을 바꿨는가"·"직접 확인한 결과" 요약을 덧붙이는 것을 제안(`.header h1`에 `min-width: 0; overflow-wrap: anywhere;` 2줄 추가로 해결, 격리 재현으로 수정 전/후 대조 확인, `home-a11y.spec.ts` 실제 재실행은 07 회귀 스윕에서 공식 확인 예정).
+- `traceability.md` REQ-002 행의 `[v4]` 문단 끝에 다음을 추가 제안: `**[v5, DEF-001 재작업]** 05가 frontend/components/CandidateHome.module.css의 .header h1에 min-width:0; overflow-wrap:anywhere; 추가로 조치. 격리 재현(Playwright, 동일 마크업/판정식)으로 수정 전 scrollWidth=1739>390(재현) → 수정 후 390=390(해소) 확인. next.lock을 unit-20이 보유 중이라 실제 앱을 통한 home-a11y.spec.ts 전체 재실행은 07 회귀 스윕에서 공식 확인 필요(08 착수 전 필수 게이트, 안전장치 1번 유지).`
+
+### Teardown 상태
+
+- 프로세스: 확인에 사용한 Playwright Chromium 인스턴스는 스크립트 안에서 매번 `browser.close()`로 동기 종료했고, 그 외 프런트/백엔드 서버·포트를 새로 띄우지 않았다(`.harness-tmp/u19def001_pids.txt`를 만들 대상 자체가 없음).
+- `.harness-tmp/next.lock`: 획득하지 않았다(불필요 + unit-20 보유 중이라 애초에 시도하지 않음). 해제 대상 없음.
+- 생성한 임시 파일(`def001_repro.html`, `def001_before.html`, `CandidateHome_before/after.module.css`, `def001_check*.js` 등)은 전부 세션 스크래치패드(`C:\Users\jcs19\AppData\Local\Temp\claude\...\scratchpad\`)에만 만들었고 저장소·`.harness-tmp`에는 아무것도 남기지 않았다.
+- `git status`(이 재작업 세션 종료 시점, 이 재작업이 만든 변경만 표시): `M frontend/components/CandidateHome.module.css` 1건. 그 외 `M`/`??` 항목(`backend/*`, `docs/harness/decisions.md`/`traceability.md`/`units/unit-19-test.md`/`units/unit-7-note.md`, `frontend/next-env.d.ts`, `frontend/e2e/unit-19/`·`unit-20/`, `backend/alembic/versions/f2a9c4d81e36_*`, `backend/app/services/job_watchdog.py`/`turn_numbering.py`, `docs/harness/verify-log_unit-19-test.md`, `99.현재상태/`)는 unit-7/unit-19(06)/unit-20/오케스트레이터가 병렬로 만든 기존 변경이며 이 재작업은 하나도 건드리지 않았다. `git add`/`git commit` 실행 안 함.
