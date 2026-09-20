@@ -16,6 +16,7 @@ from app.api.v1.ws import redis_relay_loop
 from app.api.v1.ws import router as ws_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
+from app.services.job_watchdog import job_watchdog_loop
 from app.services.tts_engine import MEDIA_ROOT
 
 app = FastAPI(title="AI 모의면접 플랫폼 API", version="0.1.0")
@@ -24,18 +25,24 @@ app = FastAPI(title="AI 모의면접 플랫폼 API", version="0.1.0")
 # §4.3 WS 이벤트를 이 API 프로세스의 ConnectionManager로 중계하는 백그라운드
 # 태스크(app/api/v1/ws.py `redis_relay_loop` 참고).
 _relay_task: asyncio.Task | None = None
+# unit-7 재작업(DEF-008/DEC-035 Q3): 처리 중 워커 크래시로 유실된 job에 대한 실패
+# 통지 감시 루프(app/services/job_watchdog.py 참고).
+_watchdog_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
-async def _start_ws_relay() -> None:
-    global _relay_task
+async def _start_background_tasks() -> None:
+    global _relay_task, _watchdog_task
     _relay_task = asyncio.create_task(redis_relay_loop())
+    _watchdog_task = asyncio.create_task(job_watchdog_loop())
 
 
 @app.on_event("shutdown")
-async def _stop_ws_relay() -> None:
+async def _stop_background_tasks() -> None:
     if _relay_task is not None:
         _relay_task.cancel()
+    if _watchdog_task is not None:
+        _watchdog_task.cancel()
 
 app.add_middleware(
     CORSMiddleware,

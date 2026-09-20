@@ -96,3 +96,120 @@
 4. 서로 다른 주제의 텍스트 답변을 2회 연속 제출하면(예: "MSA 트랜잭션" 다음 "Kubernetes 무중단배포"), 두 번째 `turn_result.ai_text`가 첫 번째 답변이 아니라 **두 번째(가장 최근) 답변 주제**를 따라가는 꼬리질문이어야 한다(대화 맥락이 최신 답변에 반응함을 확인).
 5. Celery 워커 프로세스를 죽인 상태에서 `POST /turns`를 호출하면 여전히 `202 {job_id}`가 반환되지만(사용자 텍스트는 `TRANSCRIPTS`에 저장됨), WebSocket으로 `stage_update`/`turn_result`가 오지 않는다(job이 Redis에 쌓인 채 대기) — 이는 정상 동작이며, 워커를 다시 기동하면(Celery는 큐에 남은 job을 순서대로 소비하므로) 뒤늦게 이벤트가 도착한다.
 6. (참고, 결함 아님) LLM 응답 내용은 온도(temperature)가 0이 아니라 매 호출마다 문구가 달라진다. "정답 문자열 일치"가 아니라 "한국어/질문형/주제 관련성"으로 판단할 것 — §3, §6 실측 예시 참고.
+
+## 재작업(Rework) v2 (2026-09-20, DEC-035 응답 반영)
+
+> **append-only 원칙**: 위 §1~7(최초 05 구현 기록)은 그대로 보존한다. 아래 내용이 실제 최신 동작이며, §2 편차#6(오프닝도 LLM을 거침)은 이 재작업으로 **대체**됐다(오프닝은 더 이상 LLM을 거치지 않음) — 원문은 감사 이력으로만 남긴다.
+
+### R0. 트랙 표기 및 근거
+이번 재작업이 속한 feature(Feature C, REQ-007)의 05 최초 구현은 **L1**(DEC-003)이었으나, 이번 재작업 지시에는 명시적인 트랙 지정이 없었다. ORCHESTRATOR.md 1장("트랙 표기 없으면 L3 기본값")에 따라 **L3(일반)**로 표기한다. 근거: (1) 이번 재작업은 보안(Redis 인증/노출), DB 스키마(유니크 제약), 다수 결함(DEF-001~011)에 대한 정정이라 L1/L2의 "경량 검증"보다 정식 검증이 적합하고, (2) 실제로 06(unit-7-test.md)이 이미 "사용자 요구로 전 섹션·규칙 B 2회 이상 정식 수행"했던 선례가 있어 재검증도 동일 수준으로 이어가는 것이 일관적이다. **06단계는 이 재작업에 대해 `test-report-template.md` 10섹션 전체를 정식으로 수행해야 한다** (L1 경량판 적용 금지).
+
+### R1. 재작업 배경
+`docs/harness/units/unit-7-test.md`(06, CONDITIONAL PASS) §6 결함표 DEF-001~011, §8 리스크/미해결질문 Q1~Q5, `docs/harness/decisions.md` DEC-034(결정 대기)·**DEC-035(오늘 사용자 확정 답)**을 전부 반영했다. DEC-035 확정 사항(Q1~Q5)과 DEF-004/006/007/009/010(정책 판단 불필요한 순수 구현 결함)까지 포함해 **DEF-001~011 전부**를 대상으로 재작업했다.
+
+### R2. 변경/생성 파일 전체 목록
+- **생성**:
+  - `backend/alembic/versions/f2a9c4d81e36_v9_transcripts_unique_turn_index.py` — `(interview_id, turn_index)` 유니크 제약(DEF-002).
+  - `backend/app/services/turn_numbering.py` — 원자적 채번 공용 모듈(DEF-002).
+  - `backend/app/services/job_watchdog.py` — 처리 중 워커 크래시 실패 통지(DEF-008).
+- **수정**:
+  - `backend/app/worker/tasks.py` — DEF-001(오프닝 LLM 생략)·002(채번 통일)·003/004(품질 가드+재시도+폴백)·005(잘라내기)·007(RAG exclude+threshold) 전부 반영.
+  - `backend/app/services/interview_prompts.py` — `validate_followup_speak_text()` 신설(DEF-003/004), 더 이상 쓰이지 않는 `build_opening_system_prompt`/`_OPENING_INSTRUCTION` 제거(DEF-001의 직접적 결과).
+  - `backend/app/services/rag_engine.py` — `search_similar_questions()`에 `exclude_categories`/`min_similarity` 파라미터 추가(DEF-007).
+  - `backend/app/services/llm_engine.py` — `TurnLLMOutput.speak_text` 공백 검증(DEF-006), `_ensure_server_running()` 이중 기동 방지 + PID 파일 기록(DEF-009).
+  - `backend/app/services/celery_app.py` — 전 모델 명시적 import로 워커 메타데이터 완결성 확보(DEF-010).
+  - `backend/app/services/job_queue.py` — enqueue 직후 `job_watchdog.register_job()` 호출(DEF-008).
+  - `backend/app/main.py` — `job_watchdog_loop()` 백그라운드 태스크 기동/취소 추가.
+  - `backend/app/api/v1/interviews.py` — `_next_turn_index`(count 기반) 제거, `insert_transcript_with_retry()`로 교체(DEF-002).
+  - `backend/app/api/v1/ws.py` — `redis_relay_loop()`에 서버→클라이언트 이벤트 dict/type 화이트리스트 검증 추가(DEF-011).
+  - `backend/docker-compose.yml` — Redis `127.0.0.1` 바인딩 + `--requirepass`(DEF-011).
+  - `backend/app/core/config.py`, `backend/.env`(gitignore 대상, git status에는 안 보임), `backend/.env.example` — `REDIS_URL`에 인증정보 반영(DEF-011).
+
+### R3. DEF별 대응 상세
+
+**DEF-001(오프닝 품질, High) — DEC-035 Q1(a) 채택.** `process_opening_question_job`이 더 이상 LLM을 호출하지 않는다. RAG로 선정한 `category=opening` 질문은행 항목의 `content`를 그대로 `speak_text`로 사용하고(TTS만 거침), 항목이 없으면 고정 폴백(`_OPENING_FALLBACK_TEXT`)을 쓴다. 이로써 지원자 사칭 자기소개·미치환 플레이스홀더·비한국어 조각이 원천적으로 발생할 수 없다(LLM을 거치지 않으므로). 스모크 테스트로 실제 확인(R6 참고).
+
+**DEF-002(turn_index 중복, Medium) — DEC-035 Q5 채택.** Alembic `f2a9c4d81e36`으로 `(interview_id, turn_index)` 유니크 제약을 추가했고, `app/services/turn_numbering.py::insert_transcript_with_retry()`로 오프닝/사용자 턴 채번을 통일했다(`MAX(turn_index)+1` 계산 → 유니크 제약 위반 시 재계산 후 재시도, 최대 5회). API 프로세스(사용자 턴)와 워커 프로세스(AI 턴)가 서로 다른 트랜잭션이라 "완전한 분산 락"은 택하지 않았고, DB 제약을 최종 방어선으로 둔 "낙관적 재시도" 패턴을 택했다(근거는 `turn_numbering.py` 모듈 docstring). 로컬 테스트로 유니크 제약이 실제로 중복 INSERT를 거부하고, 재시도 로직이 충돌 후에도 정상 배정하는 것을 확인(R6).
+
+**DEF-003/004(후속 질문 품질/페르소나 낭독, Medium) — DEC-035 Q1(a) 채택, 가드 재사용.** `interview_prompts.validate_followup_speak_text()`가 4가지 조건(질문형 여부·플레이스홀더 없음·한국어 비율·시스템 프롬프트 문구 미포함)을 검사한다. `tasks.py::_generate_validated_followup()`이 1차 생성 → 검증 실패 시 1회 재시도 → 그래도 실패하면 질문은행 원문(또는 고정 폴백)으로 대체한다.
+  - **질문형 판정**: 정규식 `[?？]|나요|까요|주세요|말씀해|설명해|알려`(unit-7-test.md TC-005/TC-045 표본 기반). 완벽한 자연어 이해는 과설계이므로 휴리스틱을 택했다.
+  - **한국어 비율 합격선 0.5**: 기술 면접 답변에는 영어 약어(MSA, Kubernetes 등)가 정상적으로 섞이므로 100%를 요구하지 않는다. TC-046에서 관측된 "전체가 영어인 응답"은 걸러내고 기술 용어 혼용은 통과시키는 절충값이다.
+  - **"질문형 비율 합격선"(DEC-035 지시, 예시 90%)**: 이 가드+재시도+질문은행 폴백 구조상, 최종적으로 클라이언트에 전달되는 `speak_text`는 이론상 100%가 질문형이어야 한다(질문은행 폴백 문항은 전부 질문형이므로). 다만 정규식 휴리스틱이 놓칠 수 있는 극단적 표현(예: 드물게 관측되지 않은 변형 종결어미)까지 완벽히 잡아낸다고 보장할 수 없으므로, **06 재검증 시 다표본(예: 20건 이상) 질문형 비율이 90% 이상이면 이 가드가 의도대로 동작한다고 판단할 것을 권고**한다(100% 미달 시에도 즉시 결함으로 보지 말고, 실제로 걸러지지 않은 표본의 문장 자체를 검토해 정규식 보강 여부를 판단).
+  - **페르소나 유출 마커**: `_BASE_PERSONA` 대표 문구 4개를 하드코딩 리스트로 검사(완전한 유출 방지는 REQ-039/unit-8 범위, 이 가드는 "가장 흔한 관측 패턴"만 잡는 1차 방어선).
+
+**DEF-005(긴 답변 컨텍스트 초과, Medium) — DEC-035 Q4 채택(서버측 잘라내기).** `tasks.py`가 LLM에 보내기 전 최신 답변을 1,500자, 이력 각 줄을 300자로 잘라낸다(`_truncate_for_llm`). 경계값은 unit-7-test.md TC-028 실측(1,500자 성공/2,500자 HTTP 400 실패)에서 여유를 둔 값이다. **DB에는 원본 전문이 그대로 저장된다** — 이 잘라내기는 LLM에 보내는 프롬프트 구성 단계에만 적용되며 데이터 손실이 아니다.
+
+**DEF-006(공백 speak_text, Low) — 즉시 수정.** `TurnLLMOutput.speak_text`에 `field_validator`를 추가해 `strip()` 후 빈 문자열이면 `ValueError`(pydantic `ValidationError`)를 던지도록 했다. 이미 존재하던 "스키마 위반 → 재시도 → 폴백" 경로에 자연스럽게 편입된다(별도 분기 불필요).
+
+**DEF-007(RAG 무관 후보, Low) — 즉시 수정.** `search_similar_questions()`에 `exclude_categories`/`min_similarity` 파라미터를 추가했고, `tasks.py`의 후속 검색 호출에 `exclude_categories={QuestionCategory.opening}`, `min_similarity=0.30`을 전달한다. **임계치 0.30의 근거**: unit-7-test.md TC-035 실측값(무관 질의 최고 유사도 0.17~0.18, 관련 질의 약 0.53) 사이의 보수적인 중간값으로, 명백히 무관한 질문은 걸러내되 실제 관련 질문의 재현율을 과도하게 낮추지 않는 절충값이다. 미달 시 후보 리스트가 비어 `question_id=NULL`(무관한 매칭을 DB에 남기지 않음)이 된다.
+
+**DEF-008(워커 크래시 job 유실, Medium) — DEC-035 Q3 채택(단순 실패 통지, acks_late+멱등 재처리 기각).** 신설 모듈 `app/services/job_watchdog.py`: `job_queue.py`가 enqueue 직후 Redis에 `job_watch:{job_id}` 감시 키를 남기고, `main.py` startup에서 기동하는 `job_watchdog_loop()`가 5초 주기로 Celery task 상태를 확인한다. STARTED 상태가 **150초**(콜드스타트 최대 60s + LLM 재시도 2회×25s + TTS 10s ≈ 120s의 최악 시나리오에 여유를 둔 값) 넘게 지속되면 WS `error`(`code=AI_SERVICE_TIMEOUT`) 이벤트를 대신 발행한다. PENDING(워커 다운으로 대기 중, AC5 정상 시나리오)에는 타임아웃을 적용하지 않아 기존 AC5 동작을 깨지 않는다. Celery `task_acks_late`는 그대로 `False`(기본값) 유지 — 재처리·중복 응답 위험을 만들지 않는다.
+
+**DEF-009(고아 프로세스/이중 기동, Medium) — 부분 수정(핵심 증상 해소, 완전한 Job-Object 기반 보장은 범위 밖).** `_ensure_server_running()`이 새 서브프로세스를 띄우기 전에 `_health_check()`로 "이미 포트가 응답하는 서버가 있는지"를 먼저 확인한다. 이미 응답하면(고아 서버 재사용 가능) 새 프로세스를 띄우지 않고 그대로 반환한다 — TC-041이 관측한 "이중 바인드+VRAM 2.8GB" 증상을 직접 해소한다. `_PID_FILE`(`backend/var/llm/llama-server.pid`)에 기동한 PID를 기록해 ops가 사후 식별할 수 있게 했다. **완전한 해결(부모 프로세스 강제종료 시 자식이 자동으로 함께 죽는 것, Windows Job Object)은 pywin32/ctypes가 필요한 별도 구현이라 이번 재작업 범위에서 다루지 않았다** — atexit 기반 `_shutdown()`은 정상 종료(SIGINT 등)에서만 작동하고 `taskkill /F`/`Stop-Process -Force`에는 작동하지 않는다는 한계가 남아있다(실측: 아래 R6에서 이 한계가 실제로 재현됨 — 고아가 생겼고 PID 파일로 식별해 수동 종료했다).
+
+**DEF-010(워커 메타데이터 미완결, Low/잠복) — 즉시 수정.** `celery_app.py`가 `alembic/env.py`와 동일한 원칙으로 9개 모델 전부를 명시적으로 import한다. `Base.metadata.tables`에 9개 테이블이 전부 등록됨을 확인(R6).
+
+**DEF-011(Redis 무인증 노출, High) — DEC-035 Q2 채택(즉시 반영).** `docker-compose.yml`의 Redis 서비스에 `command: ["redis-server", "--requirepass", "final_redis_pw"]`를 추가하고 포트를 `127.0.0.1:6389:6379`로 바인딩했다(이전 `6389:6379`는 전 인터페이스 공개). `REDIS_URL`(`core/config.py` 기본값, `.env`, `.env.example`)을 `redis://:final_redis_pw@localhost:6389/0`으로 갱신했다. **비밀번호를 코드/compose에 직접 적은 것은 이 저장소가 `POSTGRES_PASSWORD: final_app_pw`에 이미 적용한 것과 동일한 관례**(로컬 개발 전용 compose, DEC-007 — 실제 배포 인프라는 아직 없음)를 따른 것이며, 새로운 보안 저하가 아니라 기존 관례와의 일관성이다. 실제 배포 시에는 반드시 비밀 관리자로 외부화해야 한다(R-8과 함께 09/10 확인 대상, 이 note에서 처음 언급된 리스크가 아님). 추가로 `ws.py::redis_relay_loop()`에 서버→클라이언트 이벤트 화이트리스트(`{queue_status, stage_update, turn_result, report_ready, error}`) 검증을 넣어 비객체/미정의 타입 페이로드를 무시하도록 했다(TC-044의 두 번째 관측, "릴레이는 비객체 JSON도 그대로 전달"을 해소). **Redis pub/sub을 통한 위조 이벤트 자체(로컬호스트 내에서 앱과 동일한 신뢰 경계를 가진 프로세스가 발행)는 이번 범위에서 다루지 않았다** — HMAC 서명 등 이벤트 무결성 검증은 DEC-035가 지시한 범위(바인딩+인증+타입 화이트리스트)를 넘어서는 추가 설계라 임의로 확장하지 않았다.
+
+### R4. 설계서 대비 추가 편차
+- 오프닝이 더 이상 LLM을 거치지 않으므로 03-design §4.3 "STT 단계 없이 LLM→TTS만 수행"의 "LLM" 부분이 오프닝에 대해서는 더 이상 문언 그대로가 아니다(대신 "질문은행 원문→TTS"). §4.4 구조화 출력 계약(`TurnLLMOutput`)은 오프닝에도 여전히 내부적으로 사용된다(LLM이 만드는 대신 코드가 직접 채움) — 클라이언트에 보이는 `turn_result` 스키마는 완전히 동일해 API 계약 변경은 없다. 되돌리기 난이도: 낮음(조건문 하나, DEF-001 대응 시 이미 이 방향을 note §2 편차#6이 "권장 검토 방향"으로 예견했었다).
+
+### R5. 06단계 인수조건(Acceptance Criteria) — 재작업분 추가 (기존 §7 AC1~AC6은 그대로 유효)
+
+**사전 조건**: 기존 §7과 동일 + `docker compose up -d`로 Redis를 재기동해 새 `--requirepass`/바인딩을 적용해야 한다(기존 컨테이너를 그대로 쓰면 이전 무인증 설정이 남아있을 수 있음 — `docker compose up -d redis`로 recreate 필요). `alembic upgrade head`로 `f2a9c4d81e36`까지 적용되어야 한다(`alembic current`로 확인).
+
+- **AC-R1(DEF-001)**: `/start` 응답의 `turn_result.ai_text`가 매번 `questions` 테이블의 `category=opening` 항목의 `content`와 **정확히 일치**한다(오프닝은 이제 비결정적이지 않다 — 기존 §7 AC6/§3 "LLM 비결정성"은 후속 질문에만 적용됨을 06이 인지할 것).
+- **AC-R2(DEF-002)**: 오프닝 job이 지연/사망 중인 상태에서 사용자가 먼저 답변을 제출해도(TC-030 재현 절차) `GET /transcripts`의 `turn_index`가 중복되지 않는다. DB에서 `(interview_id, turn_index)`로 강제 중복 INSERT를 시도하면 `IntegrityError`(unique violation)로 거부된다.
+- **AC-R3(DEF-003/004)**: 서로 다른 주제 20건 이상 반복 제출 시 질문형 비율(정규식 기준, 위 R3 설명 참고) ≥90%. "네"/공백/이모지 등 짧은 입력에 `_BASE_PERSONA`의 대표 문구(예: "시니어 기술 면접관", "정답이나 모범답안")가 낭독되지 않는다.
+- **AC-R4(DEF-005)**: 2,500자·4,000자 답변을 제출해도 `turn_result.ai_text`가 고정 폴백문(`_TURN_FALLBACK_TEXT`)이 아닌 LLM 생성 응답이어야 한다(잘라내기 후 컨텍스트 초과가 재발하지 않음 확인). 그 답변 이후의 다음 턴도 연쇄 폴백되지 않아야 한다.
+- **AC-R5(DEF-006)**: (목서버 필요) `speak_text`가 공백만인 응답은 `ValidationError`로 거부되어 재시도/폴백 경로로 진입한다.
+- **AC-R6(DEF-007)**: 기술 관련 답변의 후속 검색 결과(`question_id`)가 `category=opening`인 항목을 가리키지 않는다. 명백히 무관한 답변(예: 날씨/음식 이야기)에는 `question_id=NULL`이어야 한다(유사도 0.30 미달).
+- **AC-R7(DEF-008)**: `stage_update(llm)` 수신 후 워커 프로세스를 강제 종료하고 **150초 이상** 대기하면 WS로 `error`(`code=AI_SERVICE_TIMEOUT`) 이벤트가 도착한다(장시간 대기가 필요하므로, 06이 원하면 `job_watchdog._STARTED_TIMEOUT_SECONDS`를 테스트 중에만 임시로 낮춰(예: 10초) 재현 시간을 단축하는 것을 권장 — 반드시 테스트 후 원복).
+- **AC-R8(DEF-009)**: `bin_vulkan/llama-server.exe`를 미리 독립적으로 기동해 포트 8091을 점유한 상태에서 워커를 시작해도, 워커 로그에 "포트 8091에 이미 응답하는 llama-server가 있어 재사용합니다"가 남고 **두 번째 llama-server 프로세스가 뜨지 않는다**(`Get-CimInstance`/`tasklist`로 `llama-server.exe` 프로세스 수가 1개임을 확인).
+- **AC-R9(DEF-010)**: 워커 프로세스에서 `python -c "import app.services.celery_app; from app.db.session import Base; print(sorted(Base.metadata.tables))"`가 9개 테이블(`code_submissions, consents, deletion_requests, interviews, questions, rubric_templates, transcripts, users, whiteboard_snapshots`)을 전부 출력한다.
+- **AC-R10(DEF-011)**: 호스트에서 `redis-cli -h 127.0.0.1 -p 6389 PING`(비밀번호 없이)이 `NOAUTH Authentication required.`로 거부된다. LAN IP(예: `192.168.x.x`)로의 접속 자체가 연결되지 않는다(바인딩이 127.0.0.1로 좁혀졌으므로 — 기존 TC-044처럼 LAN에서의 접근 가능성 자체를 재확인). Redis pub/sub에 비객체(JSON 배열/숫자/문자열) 또는 정의되지 않은 `type`을 담은 페이로드를 publish해도 WS 클라이언트에 전달되지 않는다(로그에 "화이트리스트 밖 페이로드 무시" 기록).
+
+### R6. 로컬 최소 동작 확인 (실제 실행 로그 요약)
+- `alembic heads`로 재작업 착수 전 현재 head가 `e4b6a1c9f2d7`(단일 head) 확인 → 마이그레이션 작성 → `alembic upgrade head` 성공 → `f2a9c4d81e36` 적용, `\d transcripts` 대응 쿼리로 `uq_transcripts_interview_id_turn_index` 확인. 적용 시점 `transcripts` 0건(영향 없음, 재작업 전 사전 확인).
+- `ruff check app alembic/env.py` — 통과(0 에러, 3건 발견 후 즉시 수정: `E501` 2건, `UP035` 1건).
+- 단위 수준 스모크: `validate_followup_speak_text()` 7개 케이스(질문형/평서문/플레이스홀더/페르소나유출/공백/영어/질문형) 전부 기대값과 일치. `TurnLLMOutput(speak_text="   ")` → `ValidationError` 확인, strip 동작 확인. `insert_transcript_with_retry()`를 실제 DB(임시 candidate+interview)로 호출해 순차 배정(0,1) 확인 후 `turn_index=0` 중복 INSERT를 직접 시도해 `IntegrityError`로 거부됨을 확인, 충돌 이후 호출이 정상적으로 다음 번호(2)를 배정함을 확인(테스트 데이터 삭제로 정리). `search_similar_questions(exclude_categories={opening}, min_similarity=0.30)`을 k8s 질의/무관 질의로 각각 호출해, k8s 질의는 opening 미포함 1건, 무관 질의는 0건 반환됨을 확인.
+- **전체 파이프라인 실제 e2e**(3개 프로세스 기동 — DB+Redis 컨테이너, `celery ... --pool=solo -Q ai_pipeline`, `uvicorn app.main:app --port 8181`, 포트 8620/8720/frontend 관련 파일은 건드리지 않음): candidate 회원가입/로그인 → 동의 → interview 생성 → WS 연결 → `/start` → `stage_update(llm)`→`(tts)`→`turn_result`(오프닝) 수신, `ai_text`가 질문은행 opening 문항 원문과 **정확히 일치**함을 확인(DEF-001). 텍스트 턴("MSA/Saga") 제출 → 후속 질문 수신, `question_id`가 `category=technical` 항목을 가리킴(DEF-007, opening 미섞임 확인). 짧은 입력("네") 제출 → 페르소나 낭독 없이 고정 폴백문("답변 감사합니다. 다음 질문으로 넘어가겠습니다.")으로 정상 처리(DEF-004 가드 동작 확인 — RAG 후보가 없어 질문은행 폴백 대신 최종 폴백 문구 사용). `GET /transcripts`로 5개 행(turn_index 0~4) 순서·중복 없음 확인. Redis에서 `job_watch:*` 키가 각 job 성공 직후 자동 삭제됨을 확인(DEF-008 감시 루프의 "정상 종료 시 정리" 동작 확인 — 실패 경로 자체는 150초 대기가 필요해 이번 스모크에서는 재현하지 않음, 06 인계).
+- **DEF-009 한계의 실제 재현(의도치 않게)**: 스모크 테스트 종료 시 Celery 워커 프로세스를 `Stop-Process -Force`(강제종료, atexit 미실행)로 종료하자 llama-server 자식 프로세스가 실제로 고아로 남는 것을 확인했다(`llama-server.pid` 파일의 PID와 실제 `Get-CimInstance`로 조회한 고아 프로세스 PID가 일치) — 위 R3 DEF-009 설명에 적어둔 한계("정상 종료에서만 atexit 작동")가 실측으로도 재현됐다. PID 파일 덕분에 즉시 식별해 `Stop-Process -Id <PID> -Force`로 정리했고(DEC-028 준수, 이미지명 기준 종료 없음), VRAM이 기준선(약 514~576MiB)으로 복귀함을 `nvidia-smi`로 확인했다. **이중 기동(두 서버가 동시에 같은 포트를 점유하는 것) 자체는 이번 스모크에서 발생하지 않았다** — 왜냐하면 애초에 고아가 생긴 시점이 스모크 "종료" 단계였고 그 이후 새 워커를 다시 기동하지 않았기 때문이다. AC-R8은 06이 "고아가 이미 떠 있는 상태에서 새 워커를 기동"하는 시나리오로 별도 재현해야 한다.
+- Redis 인증: `docker compose up -d redis`로 재기동(재작업된 `docker-compose.yml` 적용) → `redis-cli -a final_redis_pw PING` 성공, 비밀번호 없이 `PING` 시 `NOAUTH Authentication required.` 확인. `docker compose ps`에서 포트 매핑이 `127.0.0.1:6389->6379/tcp`로 표시됨(이전 `0.0.0.0:6389`에서 변경) 확인. 앱의 `settings.redis_url`(새 인증정보 포함)로 정상 PING 확인. Celery 워커 로그에 `transport: redis://:**@localhost:6389/0`로 연결 성공 로그 확인(비밀번호 마스킹 출력).
+- **정리(Teardown)**: 스모크 테스트로 만든 candidate 계정 1개와 연쇄 데이터(interviews/transcripts/consents)를 DB에서 직접 DELETE로 정리. 생성된 WAV 3개(`var/media/tts/*.wav`)를 파일명으로 특정해 삭제(기존 10개 baseline은 보존). Redis의 `celery-task-meta-*` 3개를 직접 삭제(`job_watch:*`는 이미 자동 정리되어 있었음, 위 R6 참고). 프로세스는 전부 자신이 기동한 PID만 `Stop-Process -Id <PID> -Force`로 종료(uvicorn 2개, celery 2개, 고아 llama-server 1개) — 병렬 진행 중인 unit-20의 포트 8620 프로세스(37768/21288)는 조회만 하고 건드리지 않았다. `.harness-tmp/u7rework_*`(로그/PID 기록)와 scratchpad의 임시 스크립트는 전부 삭제. `backend/var/llm/llama-server.pid`도 삭제. 최종 `git status`에 이 재작업이 만든 변경 외의 잔여물이 없음을 확인(아래 R7 참고).
+
+### R7. 게이트 1/2 재확인 및 최종 `git status`
+- 게이트 1(정적 분석): `ruff check app alembic/env.py` — **All checks passed!** (`.harness-tmp/venv_05_unit7` 재사용, `ruff` 0.16.8). 프론트엔드 변경 없음(해당 없음, 최초 05와 동일 사유).
+- 게이트 2(자체 코드 리뷰 체크리스트):
+  - [x] 설계서/디자인서 명세와 실제 구현 일치 — R4에 신규 편차(오프닝 LLM 생략) 기록. 나머지는 DEC-035가 확정한 정책을 그대로 구현.
+  - [x] 에러 처리 누락 경로 없음 — 신규 코드(turn_numbering의 IntegrityError 처리, job_watchdog의 Redis/CancelledError 처리, llm_engine의 이중 기동 감지)까지 예외를 삼키지 않고 로그/폴백으로 처리.
+  - [x] 시스템 경계 검증 — LLM 출력은 여전히 `TurnLLMOutput` 스키마로 강제 검증(공백 거부 추가). 이번 재작업은 신규 사용자 입력 경계를 추가하지 않았다(기존 `TurnCreate` 그대로).
+  - [x] 하드코딩된 시크릿/자격증명 — Redis 비밀번호는 R3 DEF-011에서 설명한 대로 기존 `POSTGRES_PASSWORD` 관례와 동일한 로컬 개발용 placeholder이며 실제 운영 시크릿이 아니다(같은 근거로 게이트2 통과 판단).
+  - [x] 신규 외부 의존성 없음 — 이번 재작업은 `requirements.txt`에 신규 패키지를 추가하지 않았다(전부 표준 라이브러리 + 기존 의존성 재사용: `celery.result.AsyncResult`, `redis.asyncio`, `pydantic.field_validator`, `re`, `time`).
+  - [x] 범위 외 변경 없음 — 포트 8620/8720 및 그 소유 파일(`frontend/app/interviews/**`, `frontend/components/WebcamPreview.tsx`, `frontend/lib/useMediaQuery.ts`, unit-19 목록 화면)은 조회조차 하지 않았다. `docs/harness/decisions.md`/`traceability.md`는 편집하지 않았다(오케스트레이터 전용, 반영 제안은 최종 보고로 전달). `git add`/`commit`도 하지 않았다.
+- 최종 `git status --short`(재작업 완료 시점, 이 유닛이 만들지 않은 변경도 함께 보임 — 병렬 진행 중인 unit-19/20 작업, 구분은 최종 보고 참고):
+```
+ M backend/.env.example
+ M backend/app/api/v1/interviews.py
+ M backend/app/api/v1/ws.py
+ M backend/app/core/config.py
+ M backend/app/main.py
+ M backend/app/services/celery_app.py
+ M backend/app/services/interview_prompts.py
+ M backend/app/services/job_queue.py
+ M backend/app/services/llm_engine.py
+ M backend/app/services/rag_engine.py
+ M backend/app/worker/tasks.py
+ M backend/docker-compose.yml
+ M docs/harness/decisions.md
+ M docs/harness/units/unit-19-test.md
+ M frontend/next-env.d.ts
+?? "99.현재상태/현재상태_02.png"
+?? backend/alembic/versions/f2a9c4d81e36_v9_transcripts_unique_turn_index.py
+?? backend/app/services/job_watchdog.py
+?? backend/app/services/turn_numbering.py
+?? docs/harness/verify-log_unit-19-test.md
+?? frontend/e2e/unit-19/
+?? frontend/e2e/unit-20/
+```
+`docs/harness/decisions.md`의 변경은 이번 세션 시작 시점부터 이미 있던 것(오케스트레이터 소관, 이 유닛이 만든 변경 아님). `docs/harness/units/unit-19-test.md`·`docs/harness/verify-log_unit-19-test.md`·`frontend/next-env.d.ts`·`frontend/e2e/unit-19/`·`frontend/e2e/unit-20/`은 병렬 진행 중인 다른 에이전트(unit-19/unit-20)의 산출물이며 이 유닛은 건드리지 않았다(내용 확인도 하지 않음, 그대로 보존). `99.현재상태/` PNG는 사용자 소유 미추적 파일로 이전부터 존재했고 이번에도 건드리지 않았다.
