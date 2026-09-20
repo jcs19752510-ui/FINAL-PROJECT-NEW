@@ -6,23 +6,32 @@
 않는다. 클라이언트→서버로는 `cancel_queue_wait` 제어 신호 하나만 화이트리스트로
 허용한다(§4.3).
 
-**이 유닛(unit-4)의 스텁 경계**: 이 모듈은 연결 수립/인증/구독 관리와 메시지
-스키마(§4.3 JSON 그대로)를 실제로 구현한다 — 즉 클라이언트가 실제로 연결하고,
-`cancel_queue_wait`를 보내고, 연결이 유지되는 것은 전부 동작한다. 다만 실제로
-`queue_status`/`stage_update`/`turn_result`를 이 채널로 push하는 주체(Redis
-큐 소비자, AI Worker)는 아직 존재하지 않는다(unit-7 이후 범위, `job_queue.py`
-참고) — 따라서 이 유닛에서는 어떤 이벤트도 실제로 도착하지 않는다. `manager.broadcast()`가
-그 미래 워커가 호출할 유일한 진입점이며, 시그니처를 이미 고정해 두었다.
+**unit-7(REQ-007)에서 실제로 채워짐**: 이 모듈은 연결 수립/인증/구독 관리와 메시지
+스키마(§4.3 JSON 그대로)를 실제로 구현한다. `queue_status`/`stage_update`/
+`turn_result`를 이 채널로 push하는 주체(AI Worker, `app/worker/tasks.py`)는
+API 서버와 별도 OS 프로세스(§1.2)라 `manager.broadcast()`를 직접 호출할 수
+없다 — 대신 Redis Pub/Sub(`app/services/ws_publisher.py`)로 이벤트를 발행하고,
+아래 `redis_relay_loop()`가 API 프로세스 시작 시 그 채널들을 구독해
+`manager.broadcast()`로 중계한다(`app/main.py` 시작 이벤트에서 백그라운드
+태스크로 기동). `queue_status`(대기열 위치/ETA)는 여전히 미구현이다 — 이 프로젝트의
+Celery 큐는 아직 대기열 길이/ETA를 계산해 push하는 로직이 없다(§1.3의 "큐
+최대길이 50/429 QUEUE_FULL"과 함께 REQ-038/unit-8 영역과 겹쳐 이번 유닛
+범위에서 제외, `job_queue.py` 모듈 docstring 참고).
 """
+import asyncio
+import json
 import logging
 from uuid import UUID
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 
+from app.core.config import settings
 from app.core.security import JWTError, decode_token
 from app.db.session import SessionLocal
 from app.models.interview import Interview
 from app.models.user import User
+from app.services.ws_publisher import WS_CHANNEL_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +80,50 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+async def redis_relay_loop() -> None:
+    """AI Worker(Celery, 별도 프로세스)가 Redis에 발행한 §4.3 이벤트를 이
+    API 프로세스의 `ConnectionManager`로 중계한다(`app/main.py` startup에서
+    백그라운드 태스크로 기동, shutdown에서 취소).
+
+    이 루프 자체의 예외(Redis 순간 단절 등)가 API 서버 전체를 죽이지 않도록
+    바깥에서 재연결을 반복한다 — §1.2 장애격리 원칙(AI Worker/인프라 문제가
+    API 서버의 다른 기능에 전파되지 않아야 함)을 WS 중계 계층에도 동일 적용.
+    """
+    while True:
+        try:
+            client = aioredis.from_url(settings.redis_url)
+            pubsub = client.pubsub()
+            await pubsub.psubscribe(f"{WS_CHANNEL_PREFIX}*")
+            try:
+                async for message in pubsub.listen():
+                    if message["type"] != "pmessage":
+                        continue
+                    channel = message["channel"]
+                    if isinstance(channel, bytes):
+                        channel = channel.decode()
+                    interview_id_str = channel[len(WS_CHANNEL_PREFIX):]
+                    try:
+                        interview_id = UUID(interview_id_str)
+                    except ValueError:
+                        continue
+                    data = message["data"]
+                    if isinstance(data, bytes):
+                        data = data.decode()
+                    try:
+                        payload = json.loads(data)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    await manager.broadcast(interview_id, payload)
+            finally:
+                await pubsub.close()
+                await client.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — Redis 순간 단절 등, 서버 전체를 죽이지 않고 재시도
+            logger.warning("redis_relay_loop 예외 발생, 3초 후 재연결", exc_info=True)
+            await asyncio.sleep(3)
 
 
 def _authenticate(token: str, interview_id: UUID) -> bool:

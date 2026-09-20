@@ -251,6 +251,25 @@ export function createInterview(accessToken: string): Promise<InterviewOut> {
   });
 }
 
+// REQ-002(unit-19): 03-system-design.md §4.2 `GET /interviews`(내 면접 목록, DEC-024
+// 갭1)와 04-ux-design.md [C-03] 지원자 홈이 소비한다. candidate 전용(그 외 역할은 403).
+export interface InterviewListItemOut {
+  id: string;
+  status: InterviewOut["status"];
+  report_status: InterviewOut["report_status"];
+  started_at: string | null;
+  ended_at: string | null;
+  overall_score: string | null;
+  created_at: string;
+  resumable: boolean;
+}
+
+export function listMyInterviews(accessToken: string): Promise<InterviewListItemOut[]> {
+  return request<InterviewListItemOut[]>("/interviews", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
 export interface InterviewStartResponse {
   job_id: string;
   message: string;

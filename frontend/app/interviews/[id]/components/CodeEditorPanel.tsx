@@ -225,7 +225,7 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
           theme="vs-dark"
           onMount={() => setEditorMounting(false)}
           onChange={handleEditorChange}
-          options={{ minimap: { enabled: false }, fontSize: 14 }}
+          options={{ minimap: { enabled: false }, fontSize: 14, automaticLayout: true }}
         />
       </div>
 

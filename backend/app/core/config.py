@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 15
     jwt_refresh_token_expire_days: int = 7
     cors_origins: str = "http://localhost:3000"
+    # unit-7(REQ-007): Celery 브로커/백엔드 + WS push용 Redis pub/sub (03-design §1.3/§2.1).
+    redis_url: str = "redis://localhost:6389/0"
     # 운영(Nginx TLS 종단, 03-system-design.md §6.4)에서는 반드시 True.
     # 로컬 개발 서버가 http인 동안은 브라우저가 Secure 쿠키를 저장하지 않으므로 False로 둔다.
     cookie_secure: bool = True

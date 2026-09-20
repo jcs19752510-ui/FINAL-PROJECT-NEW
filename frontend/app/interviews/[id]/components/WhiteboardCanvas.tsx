@@ -187,7 +187,8 @@ export default function WhiteboardCanvas({
             style={{
               ...colorSwatchStyle,
               background: preset,
-              outline: color === preset ? "2px solid #ffffff" : "1px solid rgba(255,255,255,0.3)",
+              outline: color === preset ? "2px solid var(--color-focus-ring)" : "1px solid var(--color-border)",
+              outlineOffset: 2,
             }}
           />
         ))}
@@ -219,7 +220,7 @@ export default function WhiteboardCanvas({
         </span>
       </div>
 
-      <div style={{ position: "relative", width, height }}>
+      <div style={{ position: "relative", width: "100%", maxWidth: width, aspectRatio: `${width} / ${height}` }}>
         <canvas
           ref={canvasRef}
           width={width}
@@ -278,9 +279,9 @@ const buttonStyle: CSSProperties = {
   fontSize: 12,
   padding: "6px 12px",
   borderRadius: 6,
-  border: "1px solid rgba(255,255,255,0.24)",
-  background: "rgba(255,255,255,0.08)",
-  color: "inherit",
+  border: "1px solid var(--color-border)",
+  background: "var(--color-surface)",
+  color: "var(--color-text-primary)",
   cursor: "pointer",
 };
 
@@ -293,7 +294,7 @@ const canvasStyle: CSSProperties = {
   width: "100%",
   height: "100%",
   borderRadius: 8,
-  border: "1px solid rgba(255,255,255,0.16)",
+  border: "1px solid var(--color-border)",
   background: "#ffffff",
   display: "block",
 };

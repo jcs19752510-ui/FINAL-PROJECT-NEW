@@ -7,10 +7,10 @@
 AI Worker가 기록하며, 이번 유닛은 그 워커를 만들지 않는다(job_queue.py 스텁 경계
 참고).
 
-`question_id`는 ERD상 QUESTIONS 테이블(RAG 질문은행, unit-7 책임)을 가리키는 FK이나
-QUESTIONS 테이블이 아직 존재하지 않는다. unit-2의 `rubric_template_id` 선례를 그대로
-따라 FK 제약 없이 nullable 컬럼만 만든다 — unit-7이 QUESTIONS를 생성할 때 별도
-revision으로 FK 제약을 추가해야 한다.
+`question_id`는 ERD상 QUESTIONS 테이블(RAG 질문은행)을 가리키는 FK다. unit-4는
+QUESTIONS가 아직 없어 FK 제약 없이 nullable 컬럼만 만들었으나(unit-2의
+`rubric_template_id` 선례), unit-7이 QUESTIONS를 생성하면서 별도 revision으로 FK
+제약을 추가했다(`app/models/question.py`, RAG로 선정된 질문은행 항목을 가리킴).
 """
 import uuid
 from datetime import datetime
@@ -21,6 +21,14 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.models.question import Question  # noqa: F401  # FK 대상 테이블 메타데이터 등록 필요(아래 참고)
+
+# SQLAlchemy는 `ForeignKey("questions.id")`를 해석할 때 `questions` 테이블이 이미
+# `Base.metadata`에 등록되어 있어야 한다. alembic/env.py는 모든 모델을 명시적으로
+# import해 이 문제가 없지만, FastAPI 앱(app/main.py) 쪽은 `app/models/question.py`를
+# 아무도 import하지 않으면 `questions` 테이블이 메타데이터에 없어 flush 시점에
+# `NoReferencedTableError`가 발생한다(unit-7 실측으로 확인) — 위 import로 이 순서
+# 문제를 해결한다.
 
 
 class Speaker(StrEnum):
@@ -40,8 +48,10 @@ class Transcript(Base):
     interview_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("interviews.id"), nullable=False, index=True
     )
-    # FK 제약 없음(위 모듈 docstring 참고) — unit-7이 QUESTIONS 생성 시 추가.
-    question_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # unit-7: QUESTIONS 생성과 함께 FK 제약 추가(위 모듈 docstring 참고).
+    question_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("questions.id"), nullable=True
+    )
     turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
     speaker: Mapped[Speaker] = mapped_column(Enum(Speaker, name="transcript_speaker"), nullable=False)
     input_mode: Mapped[InputMode] = mapped_column(Enum(InputMode, name="transcript_input_mode"), nullable=False)
