@@ -283,6 +283,18 @@ export function startInterview(accessToken: string, interviewId: string): Promis
   });
 }
 
+export interface InterviewEndResponse {
+  job_id: string;
+  interview: InterviewOut;
+}
+
+export function endInterview(accessToken: string, interviewId: string): Promise<InterviewEndResponse> {
+  return request<InterviewEndResponse>(`/interviews/${interviewId}/end`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
 // REQ-029~034(unit-15, Feature G): backend/app/api/v1/consents.py(unit-14)를 그대로
 // 소비한다 — 이 파일은 절대 수정하지 않는다. 필드명은 backend/app/schemas/consent.py와
 // 1:1 대응.

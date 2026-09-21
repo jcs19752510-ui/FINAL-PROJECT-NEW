@@ -35,6 +35,7 @@ import {
   type InterviewDetailOut,
   type TranscriptOut,
   createConsent,
+  endInterview,
   getInterview,
   interviewWsUrl,
   listMyConsents,
@@ -73,6 +74,12 @@ type WsEvent =
 // 명시된 값이 아님 — 이번 유닛의 그레이스풀 디그레이드 구현 세부사항).
 const AI_WAIT_TIMEOUT_MS = 12_000;
 const MAX_TEXT_LENGTH = 4000;
+
+// 사용자 요청(2026-09-21): LLM이 스스로 면접을 끝맺지 못해(control:"end_interview"가
+// 신뢰성 있게 오지 않음) 무한정 이어지는 문제 대응. backend
+// interviews.py::MAX_CANDIDATE_TURNS와 반드시 같은 값을 유지할 것 — 서버가 최종
+// 방어선이고 이 값은 UX(선제적으로 입력을 잠그고 자동 종료를 트리거)용이다.
+const MAX_CANDIDATE_TURNS = 5;
 
 type LocalMessage = TranscriptOut & { pending?: boolean };
 
@@ -272,6 +279,31 @@ export default function InterviewRoomPage() {
     timelineEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, stubNotice]);
 
+  const candidateTurnCount = useMemo(() => messages.filter((m) => m.speaker === "user").length, [messages]);
+  const turnLimitReached = candidateTurnCount >= MAX_CANDIDATE_TURNS;
+
+  // 답변 5회 도달 시 자동으로 면접을 종료한다. `interview.status !== "live"` 가드가
+  // 종료 성공 후 상태 전환과 맞물려 중복 호출을 막는다(별도 ref 불필요).
+  useEffect(() => {
+    if (!turnLimitReached || !accessToken || !interview || interview.status !== "live") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await endInterview(accessToken, interviewId);
+        if (cancelled) return;
+        const detail = await getInterview(accessToken, interviewId);
+        if (!cancelled) setInterview(detail);
+      } catch {
+        // 이미 종료됐거나 네트워크 오류인 경우 — 배너는 candidateTurnCount 기준으로
+        // 계속 표시되고, 입력창도 이미 잠겨 있으므로 별도 에러 UI 없이 조용히 무시한다.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnLimitReached, accessToken, interview?.status, interviewId]);
+
   function clearWaitTimeout() {
     if (waitTimeoutRef.current) {
       clearTimeout(waitTimeoutRef.current);
@@ -313,12 +345,13 @@ export default function InterviewRoomPage() {
       !submitting &&
       !waitingForAi &&
       !recording &&
-      !voiceUploading,
-    [inputText, submitting, waitingForAi, recording, voiceUploading],
+      !voiceUploading &&
+      !turnLimitReached,
+    [inputText, submitting, waitingForAi, recording, voiceUploading, turnLimitReached],
   );
   const canUseMic = useMemo(
-    () => micSupported && !submitting && !waitingForAi && !voiceUploading,
-    [micSupported, submitting, waitingForAi, voiceUploading],
+    () => micSupported && !submitting && !waitingForAi && !voiceUploading && !turnLimitReached,
+    [micSupported, submitting, waitingForAi, voiceUploading, turnLimitReached],
   );
 
   // 텍스트/음성 공통: 202 응답 이후 stage_update/turn_result를 기다리다 unit-7
@@ -528,7 +561,13 @@ export default function InterviewRoomPage() {
         <span className={`status-badge status-badge--${interview.status}`}>{interview.status}</span>
       </header>
 
-      {!isLive && (
+      {turnLimitReached && (
+        <div className="banner-info">
+          답변 {MAX_CANDIDATE_TURNS}회를 모두 제출하여 면접이 종료되었습니다. 수고하셨습니다.
+        </div>
+      )}
+
+      {!turnLimitReached && !isLive && (
         <div className="banner-info">
           이 세션은 현재 진행 중(live)이 아니라 대화 이력만 열람할 수 있습니다 (상태: {interview.status}).
         </div>
@@ -643,12 +682,21 @@ export default function InterviewRoomPage() {
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={canSubmitTurn ? "답변을 입력하세요..." : "이 세션은 현재 답변을 제출할 수 없습니다."}
-              disabled={!canSubmitTurn || submitting || waitingForAi || recording || voiceUploading}
+              placeholder={
+                turnLimitReached
+                  ? "답변 횟수를 모두 사용했습니다."
+                  : canSubmitTurn
+                    ? "답변을 입력하세요..."
+                    : "이 세션은 현재 답변을 제출할 수 없습니다."
+              }
+              disabled={!canSubmitTurn || submitting || waitingForAi || recording || voiceUploading || turnLimitReached}
               maxLength={MAX_TEXT_LENGTH}
               rows={3}
             />
             <div className="interview-room__composer-footer">
+              <span className="char-counter">
+                답변 {Math.min(candidateTurnCount, MAX_CANDIDATE_TURNS)}/{MAX_CANDIDATE_TURNS}
+              </span>
               <span className={`char-counter ${remainingChars < 0 ? "char-counter--over" : ""}`}>
                 {inputText.length}/{MAX_TEXT_LENGTH}
               </span>

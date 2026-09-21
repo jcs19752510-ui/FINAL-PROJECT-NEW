@@ -77,6 +77,13 @@ from app.services.turn_numbering import insert_transcript_with_retry
 # 한다 — 약 10분 분량의 16kHz/16bit 모노 WAV 원본 크기 이상의 여유를 둔 값.
 MAX_VOICE_UPLOAD_BYTES = 25 * 1024 * 1024
 
+# 사용자 요청(2026-09-21): LLM(unit-7, 1.5B)이 `control:"end_interview"`를 신뢰성 있게
+# 내지 못해(관찰상 거의 발생 안 함) 실사용 중 면접이 끝없이 이어지는 문제가 실측됨.
+# 프런트에 종료 UI가 없던 갭과 맞물려 후보자가 답변을 몇 번 해야 하는지 알 수 없었다.
+# 설계서에 명시된 값이 아닌 구현 세부값(상수 하나로 격리, 되돌리기 쉬움) — 지원자 턴
+# (speaker=user) 개수 기준으로 5회를 넘는 제출은 거부한다.
+MAX_CANDIDATE_TURNS = 5
+
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 
 # REQ-013 / DEC-026: 03-design §4.1은 `SESSION_EXPIRED`(410) 에러코드만 정의하고
@@ -336,6 +343,19 @@ def _ensure_turn_submittable(interview: Interview, db: Session) -> Interview:
             "VALIDATION_ERROR",
             "Conflict",
             f"live 상태의 세션에만 턴을 제출할 수 있습니다 (현재 상태: {interview.status.value}).",
+        )
+
+    candidate_turn_count = db.execute(
+        select(func.count())
+        .select_from(Transcript)
+        .where(Transcript.interview_id == interview.id, Transcript.speaker == Speaker.user)
+    ).scalar_one()
+    if candidate_turn_count >= MAX_CANDIDATE_TURNS:
+        raise AppError(
+            409,
+            "TURN_LIMIT_REACHED",
+            "Conflict",
+            f"답변 횟수 제한({MAX_CANDIDATE_TURNS}회)에 도달했습니다. 면접을 종료해주세요.",
         )
     return interview
 
