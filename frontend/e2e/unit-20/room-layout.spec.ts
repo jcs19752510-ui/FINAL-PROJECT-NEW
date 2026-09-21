@@ -20,6 +20,7 @@ import {
   tab,
   watchConsole,
   watchRequests,
+  whiteboardCanvas,
 } from "./support";
 
 test.describe("데스크톱 1280x900 — live 세션 기본 상태와 60:40 분할", () => {
@@ -74,7 +75,9 @@ test.describe("데스크톱 1280x900 — live 세션 기본 상태와 60:40 분�
     await expect(tab(page, TAB_CODE)).toHaveAttribute("aria-pressed", "false");
     await tab(page, TAB_CODE).click();
     await expect(sidePanel(page).locator(".monaco-editor").first()).toBeVisible();
-    await expect(sidePanel(page).locator("canvas")).toBeHidden();
+    // "canvas"만으로는 Monaco 자체 canvas(오버뷰 룰러 등)까지 걸려 strict-mode 위반이 난다
+    // (06단계에서 발견) — 화이트보드 캔버스만 명확히 지정한다.
+    await expect(whiteboardCanvas(page)).toBeHidden();
   });
 
   test("채팅으로 돌아가기: 패널 닫힘·채팅 레이아웃 복귀(패널 폭 0)", async ({ page }) => {
@@ -224,7 +227,11 @@ test.describe("로딩·오류·권한 경계", () => {
     expect(res.status()).toBe(200);
     const html = await res.text();
     expect(html).toContain("면접장을 불러오는 중입니다...");
-    expect(html).not.toContain("undefined");
+    // "undefined"는 <script> 안 RSC 페이로드 직렬화 토큰(예: "$undefined")으로 정상적으로 등장한다
+    // (06단계에서 발견 — 순수 substring 검사는 오탐이었다). script를 모두 제거한 뒤 화면에 실제
+    // 렌더링되는 마크업에서만 "undefined"가 나타나는지(하이드레이션 전 잘못된 값 노출)를 검사한다.
+    const withoutScripts = html.replace(/<script[\s\S]*?<\/script>/g, "");
+    expect(withoutScripts).not.toContain("undefined");
   });
 
   test("세션 GET 네트워크 실패 → 오류 배너 + 홈 링크, 패널/탭 미렌더", async ({ page }) => {
