@@ -15,6 +15,7 @@ import {
   tab,
   watchConsole,
   watchRequests,
+  whiteboardCanvas,
 } from "./support";
 
 const saveBtn = (page: import("@playwright/test").Page) => sidePanel(page).getByRole("button", { name: "저장", exact: true });
@@ -28,13 +29,13 @@ test.describe("데스크톱 1280x900", () => {
     const room = await createRoom("live");
     await openRoom(page, room);
     await openWhiteboardPanel(page);
-    const cv = await box(page.locator("#interview-side-panel canvas"));
+    const cv = await box(whiteboardCanvas(page));
     const pn = await box(sidePanel(page));
     expect(cv.x).toBeGreaterThanOrEqual(pn.x);
     expect(cv.x + cv.width).toBeLessThanOrEqual(pn.x + pn.width);
     expect(Math.abs(cv.width / cv.height - 1.6)).toBeLessThan(0.02);
     expect(cv.width).toBeGreaterThan(300);
-    const bg = await page.locator("#interview-side-panel canvas").evaluate((c) => getComputedStyle(c).backgroundColor);
+    const bg = await whiteboardCanvas(page).evaluate((c) => getComputedStyle(c).backgroundColor);
     expect(bg).toBe("rgb(255, 255, 255)");
   });
 
@@ -159,9 +160,14 @@ test.describe("모바일 390x800 (터치)", () => {
   test("모달 안 캔버스가 뷰포트에 맞고, 터치 드래그로 그려지며 페이지가 스크롤되지 않고, 저장 좌표가 논리 좌표로 환산된다", async ({ page, context }) => {
     const room = await createRoom("live");
     await openRoom(page, room);
+    // tab(...).tap() 만으로 이미 모달이 열린다 — openWhiteboardPanel()을 또 호출하면 탭 버튼이
+    // (이제 inert 처리된 툴바 뒤로 가려진 채) 다시 클릭되어 같은 화면 좌표의 다른 요소(색상
+    // 스와치)가 클릭을 가로채 타임아웃한다(06단계에서 발견한 테스트 중복 호출 버그).
     await tab(page, TAB_WB).tap();
-    await openWhiteboardPanel(page);
-    const cv = await box(page.locator("#interview-side-panel canvas"));
+    await sidePanel(page).getByRole("heading", { name: TAB_WB }).waitFor();
+    await whiteboardCanvas(page).waitFor();
+    await page.getByText("캔버스를 불러오는 중...").waitFor({ state: "hidden" });
+    const cv = await box(whiteboardCanvas(page));
     expect(cv.x).toBeGreaterThanOrEqual(0);
     expect(cv.x + cv.width).toBeLessThanOrEqual(390);
     const cdp = await context.newCDPSession(page);

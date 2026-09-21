@@ -14,6 +14,7 @@ import {
   sidePanel,
   tab,
   watchConsole,
+  whiteboardCanvas,
 } from "./support";
 
 const JOB = "job-e2e-1";
@@ -102,8 +103,11 @@ test.describe("데스크톱: turn_result.control 처리", () => {
     ws.send({ type: "turn_result", job_id: JOB, ai_text: "코드로", control: { action: "switch_to_coding" } });
     await expect(sidePanel(page).getByRole("heading", { name: TAB_CODE })).toBeVisible();
     await expect(tab(page, TAB_WB)).toHaveAttribute("aria-pressed", "false");
-    await expect(sidePanel(page).locator("canvas")).toHaveCount(1);
-    await expect(sidePanel(page).locator("canvas")).toBeHidden();
+    // 코드 패널이 새로 열리면 Monaco 자신의 canvas(오버뷰 룰러 등)도 DOM에 추가되므로 일반
+    // "canvas" 셀렉터는 개수가 1을 초과해 strict-mode 위반이 난다(06단계에서 발견) —
+    // 화이트보드 캔버스만 지정해 "언마운트되지 않고 숨겨짐"을 검증한다.
+    await expect(whiteboardCanvas(page)).toHaveCount(1);
+    await expect(whiteboardCanvas(page)).toBeHidden();
   });
 
   test("error 이벤트(활성 job) → 오류 배너, 패널 안 열림 / 잘못된 JSON·알 수 없는 type은 무시", async ({ page }) => {
