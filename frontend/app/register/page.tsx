@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ApiError, registerUser, type UserRole } from "@/lib/api";
+import HomeLink from "@/components/HomeLink";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -63,6 +64,7 @@ export default function RegisterPage() {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        <HomeLink />
         <h1>회원가입</h1>
         {bannerError && <div className="banner-error">{bannerError}</div>}
 

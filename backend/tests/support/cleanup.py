@@ -106,6 +106,7 @@ def cleanup_test_data(emails: Iterable[str] | None = None, *, dry_run: bool = Fa
                 "transcripts",
                 "code_submissions",
                 "whiteboard_snapshots",
+                "evaluation_reports",
                 "interviews",
                 "consents",
                 "deletion_requests",
@@ -138,6 +139,7 @@ def cleanup_test_data(emails: Iterable[str] | None = None, *, dry_run: bool = Fa
             "transcripts": "SELECT count(*) FROM transcripts WHERE interview_id = ANY(%s::uuid[])",
             "code_submissions": "SELECT count(*) FROM code_submissions WHERE interview_id = ANY(%s::uuid[])",
             "whiteboard_snapshots": "SELECT count(*) FROM whiteboard_snapshots WHERE interview_id = ANY(%s::uuid[])",
+            "evaluation_reports": "SELECT count(*) FROM evaluation_reports WHERE interview_id = ANY(%s::uuid[])",
             "interviews": "SELECT count(*) FROM interviews WHERE id = ANY(%s::uuid[])",
         }
         by_user = {
@@ -167,6 +169,11 @@ def cleanup_test_data(emails: Iterable[str] | None = None, *, dry_run: bool = Fa
             (
                 "whiteboard_snapshots",
                 "DELETE FROM whiteboard_snapshots WHERE interview_id = ANY(%s::uuid[])",
+                interview_ids,
+            ),
+            (
+                "evaluation_reports",
+                "DELETE FROM evaluation_reports WHERE interview_id = ANY(%s::uuid[])",
                 interview_ids,
             ),
             ("interviews", "DELETE FROM interviews WHERE id = ANY(%s::uuid[])", interview_ids),

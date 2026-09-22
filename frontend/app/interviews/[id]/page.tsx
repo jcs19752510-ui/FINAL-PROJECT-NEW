@@ -35,6 +35,7 @@ import {
   type InterviewDetailOut,
   type TranscriptOut,
   createConsent,
+  endInterview,
   getInterview,
   interviewWsUrl,
   listMyConsents,
@@ -44,6 +45,7 @@ import {
   submitVoiceTurn,
 } from "@/lib/api";
 import { useMediaQuery } from "@/lib/useMediaQuery";
+import HomeLink from "@/components/HomeLink";
 import WebcamPreview from "@/components/WebcamPreview";
 import InterviewSidePanel, { SIDE_PANEL_LABEL, type SidePanelId } from "./components/InterviewSidePanel";
 
@@ -73,6 +75,12 @@ type WsEvent =
 // 명시된 값이 아님 — 이번 유닛의 그레이스풀 디그레이드 구현 세부사항).
 const AI_WAIT_TIMEOUT_MS = 12_000;
 const MAX_TEXT_LENGTH = 4000;
+
+// 사용자 요청(2026-09-21): LLM이 스스로 면접을 끝맺지 못해(control:"end_interview"가
+// 신뢰성 있게 오지 않음) 무한정 이어지는 문제 대응. backend
+// interviews.py::MAX_CANDIDATE_TURNS와 반드시 같은 값을 유지할 것 — 서버가 최종
+// 방어선이고 이 값은 UX(선제적으로 입력을 잠그고 자동 종료를 트리거)용이다.
+const MAX_CANDIDATE_TURNS = 5;
 
 type LocalMessage = TranscriptOut & { pending?: boolean };
 
@@ -230,7 +238,7 @@ export default function InterviewRoomPage() {
         setMessages((prev) => [
           ...prev,
           {
-            id: `ws-${data.job_id}`,
+            id: `ws-${data.job_id}-${Date.now()}`,
             interview_id: interviewId,
             question_id: null,
             turn_index: prev.length,
@@ -268,9 +276,84 @@ export default function InterviewRoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, interviewId, interview?.status]);
 
+  // 버그 수정(2026-09-22, 사용자 리포트 "면접장 들어오면 첫 질문 안내 후 반응 없음"):
+  // `/start` 성공 시 서버가 opening_question job을 enqueue하고 완료되면 WS로
+  // turn_result를 push하는데(§4.3), 그 이벤트는 Redis Pub/Sub라 발행 시점에 이
+  // 화면의 WS 구독이 아직 안 맺어져 있으면 영구히 유실된다. 이 페이지는 진입 시
+  // getInterview/listTranscripts를 먼저 기다린 "뒤에" WS를 연결하므로(위 두 효과),
+  // 그 사이(네트워크 왕복 + 라우트 렌더링 시간)에 opening job이 먼저 끝나버리면
+  // 정확히 이 유실이 발생한다 — 실제 AI 엔진은 정상 동작 중이었지만 화면은 영원히
+  // "질문을 준비하고 있습니다"에 멈춰 있었다. GET 재조회 폴링으로 이 유실을
+  // 보완한다(report/page.tsx가 이미 쓰는 것과 동일한 §4.3 GET 폴백 원칙).
+  const [openingPollExhausted, setOpeningPollExhausted] = useState(false);
+  const [openingRetryNonce, setOpeningRetryNonce] = useState(0);
+  useEffect(() => {
+    if (loading) return;
+    if (!accessToken || !interviewId) return;
+    if (interview?.status !== "live") return;
+    if (messages.length > 0) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const OPENING_POLL_INTERVAL_MS = 3000;
+    const OPENING_POLL_MAX_ATTEMPTS = 15; // 3초 x 15 = 45초 (실측 콜드스타트 최대 13초 대비 여유)
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    async function poll() {
+      attempts += 1;
+      try {
+        const transcripts = await listTranscripts(accessToken!, interviewId);
+        if (cancelled) return;
+        if (transcripts.length > 0) {
+          setMessages(transcripts);
+          return;
+        }
+      } catch {
+        // 네트워크 순간 오류 — 다음 시도에서 재확인.
+      }
+      if (cancelled) return;
+      if (attempts >= OPENING_POLL_MAX_ATTEMPTS) {
+        setOpeningPollExhausted(true);
+        return;
+      }
+      timeoutId = setTimeout(poll, OPENING_POLL_INTERVAL_MS);
+    }
+
+    timeoutId = setTimeout(poll, OPENING_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [loading, accessToken, interviewId, interview?.status, messages.length, openingRetryNonce]);
+
   useEffect(() => {
     timelineEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, stubNotice]);
+
+  const candidateTurnCount = useMemo(() => messages.filter((m) => m.speaker === "user").length, [messages]);
+  const turnLimitReached = candidateTurnCount >= MAX_CANDIDATE_TURNS;
+
+  // 답변 5회 도달 시 자동으로 면접을 종료한다. `interview.status !== "live"` 가드가
+  // 종료 성공 후 상태 전환과 맞물려 중복 호출을 막는다(별도 ref 불필요).
+  useEffect(() => {
+    if (!turnLimitReached || !accessToken || !interview || interview.status !== "live") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await endInterview(accessToken, interviewId);
+        if (cancelled) return;
+        const detail = await getInterview(accessToken, interviewId);
+        if (!cancelled) setInterview(detail);
+      } catch {
+        // 이미 종료됐거나 네트워크 오류인 경우 — 배너는 candidateTurnCount 기준으로
+        // 계속 표시되고, 입력창도 이미 잠겨 있으므로 별도 에러 UI 없이 조용히 무시한다.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnLimitReached, accessToken, interview?.status, interviewId]);
 
   function clearWaitTimeout() {
     if (waitTimeoutRef.current) {
@@ -313,29 +396,70 @@ export default function InterviewRoomPage() {
       !submitting &&
       !waitingForAi &&
       !recording &&
-      !voiceUploading,
-    [inputText, submitting, waitingForAi, recording, voiceUploading],
+      !voiceUploading &&
+      !turnLimitReached,
+    [inputText, submitting, waitingForAi, recording, voiceUploading, turnLimitReached],
   );
   const canUseMic = useMemo(
-    () => micSupported && !submitting && !waitingForAi && !voiceUploading,
-    [micSupported, submitting, waitingForAi, voiceUploading],
+    () => micSupported && !submitting && !waitingForAi && !voiceUploading && !turnLimitReached,
+    [micSupported, submitting, waitingForAi, voiceUploading, turnLimitReached],
   );
 
-  // 텍스트/음성 공통: 202 응답 이후 stage_update/turn_result를 기다리다 unit-7
-  // 미구현 스텁 경계에서 안내 문구로 전환하는 로직(unit-4 handleSubmit에서 추출).
-  function beginWaitingForAi(jobId: string) {
+  // 텍스트/음성 공통: 202 응답 이후 stage_update/turn_result를 기다린다.
+  //
+  // 버그 수정(2026-09-22, 사용자 리포트 "음성 답변 후 반응 없음"): AI 파이프라인은
+  // unit-7에서 이미 실제로 구현되어 정상 동작 중이다. 그런데 WS 전달 경로가 Redis
+  // Pub/Sub(app/services/ws_publisher.py)를 쓰는데, Pub/Sub는 발행 시점에 그 채널을
+  // 구독 중인 클라이언트가 없으면 그 메시지를 영구히 잃는다(재전달 없음). 브라우저
+  // 탭 백그라운드 스로틀링, 순간적인 네트워크 재연결, dev 서버 라우트 컴파일 지연
+  // 등으로 WS 구독이 아주 잠깐만 늦어져도 turn_result가 그대로 유실될 수 있다.
+  // 기존 코드는 이 경우를 "AI 엔진 미구현"이라는 실제와 다른 문구로 잘못 안내하며
+  // 복구 시도를 전혀 하지 않았다 — 그 결과 실제로는 서버에 정상 저장된 응답을
+  // 사용자가 영영 못 보는 상태가 됐다(이번 버그의 실제 원인).
+  //
+  // baselineTranscriptCount: 이 턴 제출 직후 서버에 존재해야 할 최소 트랜스크립트
+  // 개수(= 사용자 턴까지 반영된 개수). GET 재조회 결과가 이보다 많아지면 AI 응답이
+  // 이미 도착한 것으로 간주한다.
+  function beginWaitingForAi(jobId: string, baselineTranscriptCount: number) {
     activeJobIdRef.current = jobId;
     setWaitingForAi(true);
     setStage(null);
     clearWaitTimeout();
     waitTimeoutRef.current = setTimeout(() => {
+      void resolveDelayedTurn(jobId, baselineTranscriptCount, 0);
+    }, AI_WAIT_TIMEOUT_MS);
+  }
+
+  // AI_WAIT_TIMEOUT_MS 안에 WS 이벤트가 안 왔을 때: 먼저 GET으로 실제 저장 여부를
+  // 확인해 유실된 WS 이벤트를 복구하고, 그래도 없으면 배경에서 몇 차례 더 재확인한다
+  // (입력창은 기존 설계 그대로 여기서 바로 다시 연다 — 사용자를 막아두지 않는다).
+  async function resolveDelayedTurn(jobId: string, baselineTranscriptCount: number, attempt: number) {
+    if (!accessToken) return;
+    if (attempt === 0) {
       setWaitingForAi(false);
       setStage(null);
       activeJobIdRef.current = null;
+    }
+    try {
+      const transcripts = await listTranscripts(accessToken, interviewId);
+      if (transcripts.length > baselineTranscriptCount) {
+        setMessages(transcripts);
+        setStubNotice(null);
+        return;
+      }
+    } catch {
+      // 네트워크 순간 오류 — 아래에서 다음 시도를 예약한다.
+    }
+    const RECONCILE_MAX_ATTEMPTS = 6; // 5초 간격 x 6회 = 최대 30초 추가 확인
+    if (attempt >= RECONCILE_MAX_ATTEMPTS) {
       setStubNotice(
-        "AI 면접관의 실시간 응답 생성 기능은 아직 준비 중입니다(엔진 구현 예정, unit-7). 방금 보낸 답변은 서버에 정상적으로 저장되었습니다 — 계속해서 다음 답변을 입력해보실 수 있습니다.",
+        "AI 응답 수신이 지연되고 있습니다. 방금 보낸 답변은 서버에 정상적으로 저장되었으니 계속해서 다음 답변을 입력해보실 수 있습니다 (응답이 도착하면 자동으로 표시됩니다).",
       );
-    }, AI_WAIT_TIMEOUT_MS);
+      return;
+    }
+    waitTimeoutRef.current = setTimeout(() => {
+      void resolveDelayedTurn(jobId, baselineTranscriptCount, attempt + 1);
+    }, 5000);
   }
 
   function describeApiError(err: unknown): string {
@@ -369,11 +493,12 @@ export default function InterviewRoomPage() {
       pending: true,
     };
 
+    const baselineTranscriptCount = messages.length + 1; // 이 턴(사용자) 저장 후 예상 개수
     try {
       const res = await submitTextTurn(accessToken, interviewId, text);
       setMessages((prev) => [...prev, { ...optimistic, pending: false }]);
       setInputText("");
-      beginWaitingForAi(res.job_id);
+      beginWaitingForAi(res.job_id, baselineTranscriptCount);
     } catch (err) {
       setSubmitError(describeApiError(err));
     } finally {
@@ -477,7 +602,7 @@ export default function InterviewRoomPage() {
       // (음성은 텍스트와 달리 클라이언트가 인식 결과를 미리 알 수 없다, 모듈 상단 설명 참고).
       const transcripts = await listTranscripts(accessToken, interviewId);
       setMessages(transcripts);
-      beginWaitingForAi(res.job_id);
+      beginWaitingForAi(res.job_id, transcripts.length);
     } catch (err) {
       if (err instanceof ApiError && err.status === 403 && err.code === "CONSENT_REQUIRED_VOICE") {
         // DEC-023: 세션 도중 철회된 경우(§6.2 실시간 재검사) 여기서 다시 걸릴 수 있다.
@@ -523,14 +648,27 @@ export default function InterviewRoomPage() {
 
   return (
     <div className={`interview-room${splitOpen ? " interview-room--split" : ""}`}>
-      <header className="interview-room__header">
+      <header className="interview-room__header" inert={modalOpen}>
+        <HomeLink />
         <h1>면접장</h1>
         <span className={`status-badge status-badge--${interview.status}`}>{interview.status}</span>
       </header>
 
-      {!isLive && (
+      {turnLimitReached && (
+        <div className="banner-info">
+          답변 {MAX_CANDIDATE_TURNS}회를 모두 제출하여 면접이 종료되었습니다. 수고하셨습니다.
+        </div>
+      )}
+
+      {!turnLimitReached && !isLive && (
         <div className="banner-info">
           이 세션은 현재 진행 중(live)이 아니라 대화 이력만 열람할 수 있습니다 (상태: {interview.status}).
+        </div>
+      )}
+
+      {interview.status === "completed" && (
+        <div className="banner-info">
+          <Link href={`/interviews/${interviewId}/report`}>리포트 보기 &rarr;</Link>
         </div>
       )}
 
@@ -577,10 +715,24 @@ export default function InterviewRoomPage() {
       <div className="interview-room__body">
         <div className="interview-room__chat" inert={modalOpen}>
           <div className="interview-room__timeline">
-            {isEmpty && canSubmitTurn && (
+            {isEmpty && canSubmitTurn && !openingPollExhausted && (
               <div className="chat-empty">
-                AI 면접관이 질문을 준비하고 있습니다... (세션 시작 시 자동으로 첫 질문이 enqueue되지만, 실제 AI
-                응답 생성 엔진은 아직 준비 중입니다 — 아래 입력창에서 자유롭게 첫 답변을 입력해도 저장됩니다.)
+                AI 면접관이 첫 질문을 준비하고 있습니다... 잠시만 기다려주세요.
+              </div>
+            )}
+            {isEmpty && canSubmitTurn && openingPollExhausted && (
+              <div className="chat-empty">
+                <p>첫 질문을 불러오는 데 예상보다 시간이 걸리고 있습니다.</p>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => {
+                    setOpeningPollExhausted(false);
+                    setOpeningRetryNonce((n) => n + 1);
+                  }}
+                >
+                  다시 확인하기
+                </button>
               </div>
             )}
             {isEmpty && !canSubmitTurn && <div className="chat-empty">아직 대화 이력이 없습니다.</div>}
@@ -643,12 +795,21 @@ export default function InterviewRoomPage() {
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={canSubmitTurn ? "답변을 입력하세요..." : "이 세션은 현재 답변을 제출할 수 없습니다."}
-              disabled={!canSubmitTurn || submitting || waitingForAi || recording || voiceUploading}
+              placeholder={
+                turnLimitReached
+                  ? "답변 횟수를 모두 사용했습니다."
+                  : canSubmitTurn
+                    ? "답변을 입력하세요..."
+                    : "이 세션은 현재 답변을 제출할 수 없습니다."
+              }
+              disabled={!canSubmitTurn || submitting || waitingForAi || recording || voiceUploading || turnLimitReached}
               maxLength={MAX_TEXT_LENGTH}
               rows={3}
             />
             <div className="interview-room__composer-footer">
+              <span className="char-counter">
+                답변 {Math.min(candidateTurnCount, MAX_CANDIDATE_TURNS)}/{MAX_CANDIDATE_TURNS}
+              </span>
               <span className={`char-counter ${remainingChars < 0 ? "char-counter--over" : ""}`}>
                 {inputText.length}/{MAX_TEXT_LENGTH}
               </span>
