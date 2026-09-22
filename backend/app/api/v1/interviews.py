@@ -293,6 +293,9 @@ def _report_to_out(interview: Interview, report: EvaluationReport | None) -> Rep
         overall_recommendation=report.overall_recommendation.value
         if report and report.overall_recommendation
         else None,
+        pass_fail_recommendation=report.pass_fail_recommendation.value
+        if report and report.pass_fail_recommendation
+        else None,
         star=star,
         summary_text=report.summary_text if report else None,
         details=report.details_json if report else None,

@@ -126,6 +126,7 @@ def get_report_detail(
         communication_score=canonical.communication_score if canonical else None,
         cultural_fit_score=canonical.cultural_fit_score if canonical else None,
         overall_recommendation=canonical.overall_recommendation if canonical else None,
+        pass_fail_recommendation=canonical.pass_fail_recommendation if canonical else None,
         star=canonical.star if canonical else None,
         summary_text=canonical.summary_text if canonical else None,
         details=canonical.details if canonical else None,

@@ -43,6 +43,7 @@ class RecruiterReportDetailOut(BaseModel):
     communication_score: int | None = None
     cultural_fit_score: int | None = None
     overall_recommendation: str | None = None
+    pass_fail_recommendation: str | None = None
     star: StarOut | None = None
     summary_text: str | None = None
     details: dict | None = None

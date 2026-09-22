@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.evaluation_report import EvaluationReport, OverallRecommendation
+from app.models.evaluation_report import EvaluationReport, OverallRecommendation, PassFailRecommendation
 from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
 from app.models.transcript import InputMode, Speaker, Transcript
@@ -314,6 +314,7 @@ def _save_evaluation_report(
     communication_score: int | None,
     cultural_fit_score: int | None,
     overall_recommendation: OverallRecommendation | None,
+    pass_fail_recommendation: PassFailRecommendation | None = None,
     star_json: dict | None,
     summary_text: str | None,
     details_json: dict | None,
@@ -326,6 +327,7 @@ def _save_evaluation_report(
     report.communication_score = communication_score
     report.cultural_fit_score = cultural_fit_score
     report.overall_recommendation = overall_recommendation
+    report.pass_fail_recommendation = pass_fail_recommendation
     report.star_json = star_json
     report.summary_text = summary_text
     report.details_json = details_json
@@ -378,6 +380,7 @@ def process_report_generation_job(self, interview_id: str) -> None:
                 communication_score=None,
                 cultural_fit_score=None,
                 overall_recommendation=None,
+                pass_fail_recommendation=None,
                 star_json=None,
                 summary_text=exc.raw_text,
                 details_json=None,
@@ -408,6 +411,9 @@ def process_report_generation_job(self, interview_id: str) -> None:
             communication_score=output.communication_clarity,
             cultural_fit_score=output.cultural_fit,
             overall_recommendation=OverallRecommendation(output.overall_recommendation),
+            pass_fail_recommendation=PassFailRecommendation(output.pass_fail_recommendation)
+            if output.pass_fail_recommendation
+            else None,
             star_json=output.star.model_dump(),
             summary_text=None,
             details_json=output.details,

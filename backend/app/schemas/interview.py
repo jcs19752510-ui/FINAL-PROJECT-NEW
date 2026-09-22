@@ -91,6 +91,9 @@ class ReportOut(BaseModel):
     communication_score: int | None
     cultural_fit_score: int | None
     overall_recommendation: str | None
+    # 원안(REQ-F-006/007) 복원분(2026-09-22 사용자 명시 승인) — REPORT_DISCLAIMER와
+    # 함께가 아니면 단독 노출 금지(app/models/evaluation_report.py 모듈 docstring 참고).
+    pass_fail_recommendation: str | None
     star: StarOut | None
     # star 파싱 성공 시 null, 실패 시에만 채워지는 폴백 텍스트(§3.1/§4.4).
     summary_text: str | None

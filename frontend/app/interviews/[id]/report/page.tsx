@@ -31,6 +31,15 @@ const RECOMMENDATION_LABEL: Record<string, string> = {
   not_recommend: "부정적",
 };
 
+// 원안(REQ-F-006/007) 복원분(2026-09-22 사용자 명시 승인) — REQ-031과 긴장 관계라
+// disclaimer 없이 단독 노출하지 않는다(app/models/evaluation_report.py 모듈 docstring,
+// backend/app/schemas/interview.py 참고). 배포 전 법무 검토 필요.
+const PASS_FAIL_LABEL: Record<string, string> = {
+  pass: "합격 쪽에 가까움",
+  fail: "불합격 쪽에 가까움",
+  borderline: "판단 보류(애매함)",
+};
+
 function ScoreRow({ label, score }: { label: string; score: number | null }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0" }}>
@@ -209,6 +218,14 @@ export default function InterviewReportPage() {
             <span className="status-badge">
               AI 참고 의견: {RECOMMENDATION_LABEL[report.overall_recommendation] ?? report.overall_recommendation}
             </span>
+          )}
+          {report.pass_fail_recommendation && (
+            <div style={{ marginTop: 8 }}>
+              <span className="status-badge" style={{ background: "var(--color-warning-bg, #fdf1de)" }}>
+                ⚠ 참고용 합격/불합격 의견:{" "}
+                {PASS_FAIL_LABEL[report.pass_fail_recommendation] ?? report.pass_fail_recommendation}
+              </span>
+            </div>
           )}
         </div>
 
