@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ApiError, loginUser, storeAccessToken } from "@/lib/api";
+import HomeLink from "@/components/HomeLink";
 
 export default function LoginPage() {
   return (
@@ -48,6 +49,7 @@ function LoginForm() {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        <HomeLink />
         <h1>로그인</h1>
         {justRegistered && (
           <div style={{ color: "var(--color-text-secondary)", fontSize: 13, marginBottom: 16 }}>

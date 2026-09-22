@@ -415,10 +415,18 @@ export async function openCodePanel(page: Page): Promise<void> {
   await monacoReady(page);
 }
 
+// 코드 패널이 먼저 열린 적이 있으면 Monaco가 자체 canvas(오버뷰 룰러/미니맵 등)를 `#interview-side-panel`
+// 안에 hidden 상태로 계속 남겨둔다(InterviewSidePanel은 한 번 연 패널을 unmount하지 않음). 화이트보드의
+// 실제 드로잉 캔버스는 고정 640x400(WhiteboardCanvas 기본 props)이라 그 속성으로 명확히 골라낸다
+// (06단계에서 발견: 단순 `canvas` 셀렉터는 strict-mode 위반을 일으킨다).
+export function whiteboardCanvas(page: Page) {
+  return page.locator('#interview-side-panel canvas[width="640"][height="400"]');
+}
+
 export async function openWhiteboardPanel(page: Page): Promise<void> {
   await tab(page, TAB_WB).click();
   await sidePanel(page).getByRole("heading", { name: TAB_WB }).waitFor();
-  await page.locator("#interview-side-panel canvas").waitFor();
+  await whiteboardCanvas(page).waitFor();
   await page.getByText("캔버스를 불러오는 중...").waitFor({ state: "hidden" });
 }
 
@@ -437,7 +445,7 @@ export async function splitRatio(page: Page): Promise<number> {
 
 /** 캔버스 논리 좌표(640x400) 기준 점을 화면 좌표로 환산한다. */
 export async function canvasPoint(page: Page, fx: number, fy: number) {
-  const b = await box(page.locator("#interview-side-panel canvas"));
+  const b = await box(whiteboardCanvas(page));
   return { x: b.x + b.width * fx, y: b.y + b.height * fy, box: b };
 }
 
@@ -455,7 +463,7 @@ export async function drawStroke(page: Page, from: [number, number], to: [number
 export async function hasInkNear(page: Page, cx: number, cy: number, r = 6): Promise<boolean> {
   return page.evaluate(
     ({ cx, cy, r }) => {
-      const c = document.querySelector("#interview-side-panel canvas") as HTMLCanvasElement;
+      const c = document.querySelector('#interview-side-panel canvas[width="640"][height="400"]') as HTMLCanvasElement;
       const d = c.getContext("2d")!.getImageData(Math.max(0, cx - r), Math.max(0, cy - r), 2 * r, 2 * r).data;
       for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true;
       return false;

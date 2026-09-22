@@ -24,6 +24,7 @@ from app.core.config import settings
 from app.models.code_submission import CodeSubmission  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.consent import Consent  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.deletion_request import DeletionRequest  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.evaluation_report import EvaluationReport  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.interview import Interview  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.question import Question  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.rubric_template import RubricTemplate  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요

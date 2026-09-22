@@ -4,11 +4,11 @@
  * [R-02] 리포트 상세(열람 전용) — unit-12, Feature F, REQ-011.
  *
  * 04-ux-design.md v2 §2 [R-02] 명세와 편차: 캐노니컬 엔드포인트는
- * `GET /interviews/{id}/report`이나, 이 유닛은 병렬 개발 파일 충돌 회피를 위해
- * `GET /recruiter/reports/{interview_id}`(backend/app/api/v1/recruiter.py)를
- * 전용으로 사용한다(백엔드 모듈 docstring 참고). Feature E(리포트 생성) 미구현으로
- * 점수 게이지/STAR 피드백/근거 아코디언 등 리포트 본문은 아직 없으며, 이 화면은
- * `report_available=false`일 때 상태 안내만 정직하게 표시한다(가짜 데이터 금지).
+ * `GET /interviews/{id}/report`이나, 이 화면은 여전히 recruiter 전용
+ * `GET /recruiter/reports/{interview_id}`(backend/app/api/v1/recruiter.py)를 쓴다 —
+ * 그 엔드포인트가 Feature E 도입 이후 캐노니컬 로직의 얇은 래퍼로 축소되어 실제
+ * 데이터는 동일하다(백엔드 모듈 docstring 참고). `report_available=false`일 때는
+ * 여전히 상태 안내만 표시한다(가짜 데이터 금지 원칙 유지).
  * REQ-034 법률자문 고지 배너는 리포트 본문 유무와 무관하게 항상 노출한다.
  */
 import Link from "next/link";
@@ -23,6 +23,7 @@ import {
   getRecruiterReportDetail,
   readAccessToken,
 } from "@/lib/api";
+import HomeLink from "@/components/HomeLink";
 import styles from "../recruiter.module.css";
 
 const STATUS_LABEL: Record<RecruiterReportDetailOut["status"], string> = {
@@ -31,6 +32,12 @@ const STATUS_LABEL: Record<RecruiterReportDetailOut["status"], string> = {
   paused: "일시중지",
   completed: "완료",
   expired: "만료",
+};
+
+const RECOMMENDATION_LABEL: Record<string, string> = {
+  recommend: "긍정적",
+  neutral: "중립",
+  not_recommend: "부정적",
 };
 
 function formatDateTime(iso: string | null): string {
@@ -119,6 +126,7 @@ export default function RecruiterReportDetailPage() {
 
   return (
     <div className={styles.page}>
+      <HomeLink />
       <Link href="/recruiter" className={styles.backLink}>
         &larr; 목록으로
       </Link>
@@ -145,10 +153,33 @@ export default function RecruiterReportDetailPage() {
           </div>
 
           <div className={styles.reportBody}>
-            {detail.report_available ? (
-              <p>{detail.message}</p>
-            ) : (
+            {!detail.report_available ? (
               <div className={styles.emptyText}>{detail.message}</div>
+            ) : (
+              <>
+                {(detail.technical_score !== null ||
+                  detail.communication_score !== null ||
+                  detail.cultural_fit_score !== null) && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div>기술 이해도: {detail.technical_score ?? "-"} / 5</div>
+                    <div>의사소통: {detail.communication_score ?? "-"} / 5</div>
+                    <div>조직 적합도: {detail.cultural_fit_score ?? "-"} / 5</div>
+                    {detail.overall_recommendation && (
+                      <div>AI 참고 의견: {RECOMMENDATION_LABEL[detail.overall_recommendation]}</div>
+                    )}
+                  </div>
+                )}
+                {detail.star ? (
+                  <div>
+                    <p><strong>상황(Situation)</strong><br />{detail.star.situation}</p>
+                    <p><strong>과제(Task)</strong><br />{detail.star.task}</p>
+                    <p><strong>행동(Action)</strong><br />{detail.star.action}</p>
+                    <p><strong>결과(Result)</strong><br />{detail.star.result}</p>
+                  </div>
+                ) : (
+                  detail.summary_text && <p style={{ whiteSpace: "pre-wrap" }}>{detail.summary_text}</p>
+                )}
+              </>
             )}
           </div>
         </div>

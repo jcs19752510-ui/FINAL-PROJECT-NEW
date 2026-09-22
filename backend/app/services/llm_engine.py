@@ -32,7 +32,7 @@ import urllib.request
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +209,59 @@ def _shutdown() -> None:
         pass
 
 
-def _call_chat_completions(system_prompt: str, user_message: str) -> str:
+class StarOutput(BaseModel):
+    """실측 결함(2026-09-21, 사용자 리포트 화면 확인): 1.5B 모델이 `star`를 스키마대로
+    4개 필드 객체로 안 주고 하나의 문자열로 뭉쳐서 반환하는 경우가 있었다. 그 결과
+    ReportLLMOutput 전체 검증이 실패해 star_json 없이 원본 LLM 응답 JSON 전체가
+    `summary_text`(사람이 읽으라고 만든 폴백이 아니라 디버그용 원문)에 그대로
+    저장되고, 리포트 화면이 그 raw JSON을 사용자에게 그대로 보여주는 문제로
+    이어졌다. `model_validator(mode="before")`로 문자열 응답을 `situation`에 담아
+    최소한 사람이 읽을 수 있는 리포트가 나오게 한다(4개 필드 완전 분리는 포기하되
+    "리포트 자체가 깨져 보이는" 심각한 문제를 막는 것을 우선).
+    """
+
+    situation: str = ""
+    task: str = ""
+    action: str = ""
+    result: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_flat_string(cls, data):
+        if isinstance(data, str):
+            return {"situation": data, "task": "", "action": "", "result": ""}
+        return data
+
+
+class ReportLLMOutput(BaseModel):
+    """03-system-design.md §4.4 리포트 생성(`report_generation` job) 구조화 출력 계약 그대로.
+
+    `overall_recommendation`을 Literal enum으로 선언해(REQ-031) "합격/불합격 확정"류
+    값이 화이트리스트를 벗어나면 pydantic이 자동으로 거부한다.
+    """
+
+    star: StarOutput
+    technical_accuracy: int = Field(ge=1, le=5)
+    communication_clarity: int = Field(ge=1, le=5)
+    cultural_fit: int = Field(ge=1, le=5)
+    overall_recommendation: Literal["recommend", "neutral", "not_recommend"]
+    # 원안(REQ-F-006/007) 복원분(2026-09-22 사용자 명시 승인, evaluation_report.py
+    # 모듈 docstring 참고). optional + 기본 None — 모델이 생략해도 리포트 자체는
+    # 깨지지 않는다(overall_recommendation 3단계가 여전히 1차 방어선).
+    pass_fail_recommendation: Literal["pass", "fail", "borderline"] | None = None
+    details: dict = Field(default_factory=dict)
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def _coerce_details(cls, v):
+        # StarOutput과 동일한 이유(모델이 스키마를 완전히 지키지 않는 경우 대비) —
+        # dict가 아니면 근거 텍스트로 감싸 리포트 자체가 깨지지 않게 한다.
+        if not isinstance(v, dict):
+            return {"note": str(v)}
+        return v
+
+
+def _call_chat_completions(system_prompt: str, user_message: str, max_tokens: int = 300) -> str:
     """llama-server의 `/v1/chat/completions`(OpenAI 호환 API)를 호출한다.
 
     **역할 분리(03-design §6.3 프롬프트 인젝션 방어 — 이 유닛이 최소한으로 갖추는
@@ -228,7 +280,7 @@ def _call_chat_completions(system_prompt: str, user_message: str) -> str:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            "max_tokens": 300,
+            "max_tokens": max_tokens,
             "temperature": 0.6,
             "response_format": {"type": "json_object"},
         },
@@ -268,3 +320,44 @@ def generate_turn_response(system_prompt: str, user_message: str) -> TurnLLMOutp
             logger.warning("LLM 구조화 출력 파싱 실패(시도 %d/2): %s", attempt + 1, exc)
             continue
     raise LlmGenerationError("LLM이 유효한 구조화 출력을 생성하지 못했습니다.") from last_error
+
+
+class ReportParsingFailed(Exception):
+    """03-design §4.4 리포트 파싱 실패 폴백 경로 전용 예외.
+
+    `LlmGenerationError`(서버 호출 자체 실패 — 완전한 job 실패, `report_status=failed`)와
+    구분된다: 이 예외는 LLM 호출/응답 수신에는 성공했으나 JSON 스키마 파싱만
+    실패한 경우이며, 호출부(worker/tasks.py)가 `raw_text`를 `EVALUATION_REPORTS.
+    summary_text`(폴백 필드)에 저장하고 `report_status`는 그대로 `ready`로 표시한다.
+    """
+
+    def __init__(self, raw_text: str):
+        super().__init__("LLM 리포트 출력 파싱에 실패했습니다.")
+        self.raw_text = raw_text
+
+
+# 03-design §4.4: STAR 4개 필드 + 근거(details)까지 요구해 턴 처리(300 토큰)보다
+# 출력이 길다 — 컨텍스트(4096 토큰) 안에서 충분한 여유를 둔 값(실측 근거 없음,
+# 이번 유닛의 구현 세부값).
+_REPORT_MAX_TOKENS = 700
+
+
+def generate_report_response(system_prompt: str, user_message: str) -> ReportLLMOutput:
+    """03-design §4.4 리포트 생성 구조화 출력. 파싱 실패 시 최대 1회 재시도(턴 처리와
+    동일 원칙) 후에도 실패하면 `ReportParsingFailed(raw_text=...)`를 던져 호출부가
+    §3.1 `summary_text` 폴백 경로를 적용하게 한다. 서버 호출 자체가 실패하면(타임아웃
+    등) `_call_chat_completions`가 던지는 `LlmGenerationError`가 그대로 전파된다 —
+    이 경우는 파싱 폴백이 아니라 완전한 job 실패로 다뤄야 한다(호출부 책임).
+    """
+    raw = ""
+    last_error: Exception | None = None
+    for attempt in range(2):
+        raw = _call_chat_completions(system_prompt, user_message, max_tokens=_REPORT_MAX_TOKENS)
+        try:
+            return ReportLLMOutput.model_validate_json(raw)
+        except (ValidationError, json.JSONDecodeError) as exc:
+            last_error = exc
+            logger.warning("리포트 구조화 출력 파싱 실패(시도 %d/2): %s", attempt + 1, exc)
+            continue
+    logger.warning("리포트 파싱 재시도 소진 — summary_text 폴백으로 전환", exc_info=last_error)
+    raise ReportParsingFailed(raw_text=raw)

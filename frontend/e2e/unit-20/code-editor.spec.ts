@@ -46,7 +46,9 @@ test("실제 키보드 입력도 onChange로 반영(미저장) — Monaco 포커
   await openCodePanel(page);
   await sidePanel(page).locator(".monaco-editor .view-lines").first().click();
   await page.keyboard.press("Control+End");
-  await page.keyboard.type("x = 1");
+  // delay 없이 타이핑하면 Monaco의 입력 처리 주기와 경합해 문자가 간헐적으로 누락된다
+  // (06단계에서 발견 — 예: "x = 1" → "x 1"). 소량의 지연으로 실제 키 입력과 유사하게 만든다.
+  await page.keyboard.type("x = 1", { delay: 30 });
   await expect(status(page, "미저장")).toBeVisible();
   expect(await getEditorValue(page)).toContain("x = 1");
 });
@@ -196,7 +198,12 @@ test("빈 내용 제출 허용(서버 min_length=0) + 저장 중 중복 클릭 �
   await openRoom(page, room);
   await openCodePanel(page);
   await setEditorValue(page, "");
-  await status(page, "미저장").waitFor().catch(() => undefined);
+  // 빈 문자열이 기존 lastSavedContentRef("" — 아직 제출한 적 없는 세션의 초기값)와 우연히
+  // 같아 "미저장"으로 전이하지 않을 수 있다(정상 동작, 경계 케이스) — 그래서 이 대기는 "best
+  // effort"다. 하지만 .waitFor()는 기본적으로 무한 대기(config에 actionTimeout 미설정)라
+  // .catch()가 실행될 기회조차 없이 테스트 전체 타임아웃(30s)까지 브라우저를 붙잡고 있다가
+  // 페이지가 강제 종료되는 결함을 06단계에서 발견했다 — 짧은 명시적 타임아웃으로 고친다.
+  await status(page, "미저장").waitFor({ timeout: 1000 }).catch(() => undefined);
   await page.route(/code-submissions$/, async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     await new Promise((r) => setTimeout(r, 700));

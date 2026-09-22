@@ -48,6 +48,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -56,6 +58,7 @@ from app.api.deps import get_current_user
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models.consent import Consent, ConsentType
+from app.models.evaluation_report import EvaluationReport
 from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.transcript import InputMode, Speaker, Transcript
 from app.models.user import User, UserRole
@@ -65,6 +68,8 @@ from app.schemas.interview import (
     InterviewListItemOut,
     InterviewOut,
     InterviewStartResponse,
+    ReportOut,
+    StarOut,
 )
 from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate
 from app.services.job_queue import enqueue_opening_question_job, enqueue_report_generation_job, enqueue_turn_job
@@ -76,6 +81,13 @@ from app.services.turn_numbering import insert_transcript_with_retry
 # 답변 하나가 이 크기를 넘으면 422로 거부해 대용량 업로드로 메모리를 소모하지 않게
 # 한다 — 약 10분 분량의 16kHz/16bit 모노 WAV 원본 크기 이상의 여유를 둔 값.
 MAX_VOICE_UPLOAD_BYTES = 25 * 1024 * 1024
+
+# 사용자 요청(2026-09-21): LLM(unit-7, 1.5B)이 `control:"end_interview"`를 신뢰성 있게
+# 내지 못해(관찰상 거의 발생 안 함) 실사용 중 면접이 끝없이 이어지는 문제가 실측됨.
+# 프런트에 종료 UI가 없던 갭과 맞물려 후보자가 답변을 몇 번 해야 하는지 알 수 없었다.
+# 설계서에 명시된 값이 아닌 구현 세부값(상수 하나로 격리, 되돌리기 쉬움) — 지원자 턴
+# (speaker=user) 개수 기준으로 5회를 넘는 제출은 거부한다.
+MAX_CANDIDATE_TURNS = 5
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 
@@ -255,6 +267,96 @@ def end_interview(
     return InterviewEndResponse(job_id=job_id, interview=InterviewOut.model_validate(interview))
 
 
+def _get_report_viewable_interview(interview_id: UUID, current_user: User, db: Session) -> Interview:
+    """`GET /{id}/report`(Feature E) 캐노니컬 RBAC: 03-design §6.1 "채용담당자
+    대시보드 — recruiter 역할이면 전 지원자 리포트 열람 가능(단일 조직 MVP 정책,
+    organization_id 세분화 없음)" + 지원자 본인 소유. `_get_own_interview`와 달리
+    recruiter도 통과시킨다.
+    """
+    interview = db.get(Interview, interview_id)
+    if interview is None:
+        raise AppError(404, "NOT_FOUND", "Not Found", "면접 세션을 찾을 수 없습니다.")
+    if current_user.role != UserRole.recruiter and interview.candidate_id != current_user.id:
+        raise AppError(403, "AUTH_FORBIDDEN", "Forbidden", "본인의 면접 세션이거나 채용담당자만 조회할 수 있습니다.")
+    return interview
+
+
+def _report_to_out(interview: Interview, report: EvaluationReport | None) -> ReportOut:
+    star = StarOut(**report.star_json) if report is not None and report.star_json else None
+    return ReportOut(
+        interview_id=interview.id,
+        report_status=interview.report_status.value,
+        overall_score=interview.overall_score,
+        technical_score=report.technical_score if report else None,
+        communication_score=report.communication_score if report else None,
+        cultural_fit_score=report.cultural_fit_score if report else None,
+        overall_recommendation=report.overall_recommendation.value
+        if report and report.overall_recommendation
+        else None,
+        pass_fail_recommendation=report.pass_fail_recommendation.value
+        if report and report.pass_fail_recommendation
+        else None,
+        star=star,
+        summary_text=report.summary_text if report else None,
+        details=report.details_json if report else None,
+    )
+
+
+@router.get("/{interview_id}/report", response_model=None)
+def get_report(
+    interview_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ReportOut | JSONResponse:
+    """캐노니컬 리포트 조회(Feature E, REQ-009/010/012, 03-design §4.2 그대로) —
+    지원자 본인([C-11])과 채용담당자([R-02])가 공유한다(`app/api/v1/recruiter.py`가
+    이 로직의 얇은 래퍼로 recruiter 전용 경로도 계속 제공한다).
+    """
+    interview = _get_report_viewable_interview(interview_id, current_user, db)
+
+    if interview.report_status == ReportStatus.none:
+        raise AppError(409, "VALIDATION_ERROR", "Conflict", "면접이 아직 종료되지 않아 리포트가 없습니다.")
+    if interview.report_status == ReportStatus.queued:
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "processing"})
+    if interview.report_status == ReportStatus.failed:
+        raise AppError(
+            409,
+            "REPORT_GENERATION_FAILED",
+            "Conflict",
+            "리포트 생성에 실패했습니다. `/report/regenerate`로 다시 시도해주세요.",
+        )
+
+    report = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_id))
+    return _report_to_out(interview, report)
+
+
+@router.post("/{interview_id}/report/regenerate", status_code=status.HTTP_202_ACCEPTED)
+def regenerate_report(
+    interview_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """리포트 재시도(Feature E, 03-design §4.2) — `report_status=failed`일 때만
+    허용한다. 재시도 실행 주체는 지원자 본인으로 한정한다(recruiter는 열람만
+    가능, `/end`와 동일하게 세션 소유자만 상태를 바꿀 수 있다는 원칙 유지).
+    """
+    interview = _get_own_interview(interview_id, current_user, db)
+
+    if interview.report_status != ReportStatus.failed:
+        raise AppError(
+            409,
+            "VALIDATION_ERROR",
+            "Conflict",
+            f"리포트 생성이 실패한 세션만 재시도할 수 있습니다 (현재 상태: {interview.report_status.value}).",
+        )
+
+    interview.report_status = ReportStatus.queued
+    db.commit()
+
+    job_id = enqueue_report_generation_job(interview.id)
+    return {"job_id": job_id}
+
+
 def _to_detail(interview: Interview) -> InterviewDetailOut:
     resumable = interview.status in (InterviewStatus.live, InterviewStatus.paused)
     return InterviewDetailOut(**InterviewOut.model_validate(interview).model_dump(), resumable=resumable)
@@ -337,6 +439,19 @@ def _ensure_turn_submittable(interview: Interview, db: Session) -> Interview:
             "Conflict",
             f"live 상태의 세션에만 턴을 제출할 수 있습니다 (현재 상태: {interview.status.value}).",
         )
+
+    candidate_turn_count = db.execute(
+        select(func.count())
+        .select_from(Transcript)
+        .where(Transcript.interview_id == interview.id, Transcript.speaker == Speaker.user)
+    ).scalar_one()
+    if candidate_turn_count >= MAX_CANDIDATE_TURNS:
+        raise AppError(
+            409,
+            "TURN_LIMIT_REACHED",
+            "Conflict",
+            f"답변 횟수 제한({MAX_CANDIDATE_TURNS}회)에 도달했습니다. 면접을 종료해주세요.",
+        )
     return interview
 
 
@@ -409,7 +524,12 @@ async def _submit_voice_turn(
         )
 
     try:
-        text = transcribe_audio(audio_bytes)
+        # 장애 대응(2026-09-22): faster-whisper STT는 초 단위로 걸릴 수 있는 동기
+        # CPU 작업이다. 이 함수는 `async def` 체인 안에서 직접 호출되므로 스레드풀
+        # 없이 부르면 그 몇 초 동안 프로세스 전체의 이벤트 루프가 멈춘다(다른 모든
+        # 요청/WS가 응답 불능이 됨) — 음성 답변 제출이 실제 백엔드 행을 일으킨
+        # 근본 원인 중 하나로 확인되어 명시적으로 스레드풀에 위임한다.
+        text = await run_in_threadpool(transcribe_audio, audio_bytes)
     except SttTranscriptionError as exc:
         raise AppError(
             504,
@@ -430,7 +550,8 @@ async def _submit_voice_turn(
             "음성에서 텍스트를 인식하지 못했습니다. 다시 녹음해주세요.",
         )
 
-    transcript = insert_transcript_with_retry(
+    transcript = await run_in_threadpool(
+        insert_transcript_with_retry,
         db,
         interview.id,
         lambda turn_index: Transcript(
@@ -443,7 +564,7 @@ async def _submit_voice_turn(
         ),
     )
 
-    job_id = enqueue_turn_job(interview.id, transcript.id)
+    job_id = await run_in_threadpool(enqueue_turn_job, interview.id, transcript.id)
     return TurnAcceptedResponse(job_id=job_id)
 
 
@@ -463,8 +584,14 @@ async def submit_turn(
     유지한다(FastAPI의 pydantic 바디 파라미터도 원래 Content-Type을 검사하지 않고
     `request.json()`을 호출하는 것과 동일한 동작).
     """
-    interview = _get_own_interview(interview_id, current_user, db)
-    interview = _ensure_turn_submittable(interview, db)
+    # 장애 대응(2026-09-22): 이 라우트는 `await request.body()`/`.form()`이 필요해
+    # `async def`인데, 아래 헬퍼들은 전부 동기(블로킹) DB 호출이다. `async def`
+    # 라우트는 FastAPI가 자동으로 스레드풀에 위임해주지 않으므로(그건 `def` 라우트만
+    # 해당), 직접 호출하면 그 블로킹 동안 프로세스 전체의 단일 이벤트 루프가 멈춘다
+    # (`ws.py::_authenticate`와 동일한 근본 원인, 실제 백엔드 응답 불능 장애로 실측
+    # 확인됨). 매 턴 제출마다 지나가는 경로라 영향이 커 스레드풀로 명시적으로 넘긴다.
+    interview = await run_in_threadpool(_get_own_interview, interview_id, current_user, db)
+    interview = await run_in_threadpool(_ensure_turn_submittable, interview, db)
 
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("multipart/form-data"):
@@ -475,7 +602,7 @@ async def submit_turn(
         payload = TurnCreate.model_validate_json(body)
     except ValidationError as exc:
         raise AppError(422, "VALIDATION_ERROR", "Validation Error", str(exc.errors())) from exc
-    return _submit_text_turn(interview, payload, db)
+    return await run_in_threadpool(_submit_text_turn, interview, payload, db)
 
 
 @router.get("/{interview_id}/transcripts", response_model=list[TranscriptOut], status_code=status.HTTP_200_OK)

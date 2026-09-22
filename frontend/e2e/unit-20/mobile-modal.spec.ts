@@ -16,7 +16,16 @@ import {
   watchConsole,
 } from "./support";
 
-test.use({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
+// 가짜 카메라 플래그가 없으면 headless 환경엔 실카메라가 없어 real getUserMedia가 NotFoundError로
+// 거부된다 — "웹캠 타일 버튼(모바일) 44px" 테스트가 installMediaSpy(page,"real")로 실제 API를 감싸
+// 쓰므로 파일(워커) 단위로 필요하다(webcam.spec.ts/ws-switch.spec.ts와 동일한 이유로 describe
+// 내부에는 지정 불가 — 06단계에서 발견).
+test.use({
+  viewport: { width: 390, height: 800 },
+  hasTouch: true,
+  isMobile: true,
+  launchOptions: { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] },
+});
 
 test.describe("모바일 390x800 — 웹캠 토글", () => {
   test("뷰포트 메타 적용(innerWidth=390), 웹캠 토글 기본 접힘→펼침, 버튼 높이 ≥44", async ({ page }) => {
@@ -126,7 +135,11 @@ test.describe("모바일 390x800 — 전체화면 모달", () => {
       });
       if (!info.inside && !info.body) escaped.push(info.desc);
     }
-    expect(escaped).toEqual([]);
+    // <nextjs-portal>은 Next.js dev 모드 전용 아티팩트(빌드 인디케이터/에러 오버레이)로,
+    // 문서 최상위(모달/inert 트리 밖)에 렌더링되어 이 검사와 무관하다(06단계에서 발견,
+    // 프로덕션 빌드에는 존재하지 않는다).
+    const real = escaped.filter((d) => !/^NEXTJS-PORTAL\b/i.test(d));
+    expect(real).toEqual([]);
   });
 
   test("터치 타깃: 모달 안 모든 보이는 버튼/select/range가 44x44 이상(Monaco 내부 제외)", async ({ page }) => {
