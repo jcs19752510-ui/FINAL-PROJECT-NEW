@@ -245,6 +245,10 @@ class ReportLLMOutput(BaseModel):
     communication_clarity: int = Field(ge=1, le=5)
     cultural_fit: int = Field(ge=1, le=5)
     overall_recommendation: Literal["recommend", "neutral", "not_recommend"]
+    # 원안(REQ-F-006/007) 복원분(2026-09-22 사용자 명시 승인, evaluation_report.py
+    # 모듈 docstring 참고). optional + 기본 None — 모델이 생략해도 리포트 자체는
+    # 깨지지 않는다(overall_recommendation 3단계가 여전히 1차 방어선).
+    pass_fail_recommendation: Literal["pass", "fail", "borderline"] | None = None
     details: dict = Field(default_factory=dict)
 
     @field_validator("details", mode="before")

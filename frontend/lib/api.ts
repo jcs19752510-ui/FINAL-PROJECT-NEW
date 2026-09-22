@@ -234,6 +234,9 @@ export interface RecruiterReportDetailOut extends RecruiterInterviewListItemOut 
   communication_score: number | null;
   cultural_fit_score: number | null;
   overall_recommendation: "recommend" | "neutral" | "not_recommend" | null;
+  // 원안(REQ-F-006/007) 복원분(2026-09-22 사용자 명시 승인) — REQ-031과 긴장 관계,
+  // 배포 전 법무 검토 필요(backend/app/models/evaluation_report.py 모듈 docstring 참고).
+  pass_fail_recommendation: "pass" | "fail" | "borderline" | null;
   star: StarOut | null;
   summary_text: string | null;
   details: Record<string, unknown> | null;
@@ -250,6 +253,7 @@ export interface ReportOut {
   communication_score: number | null;
   cultural_fit_score: number | null;
   overall_recommendation: "recommend" | "neutral" | "not_recommend" | null;
+  pass_fail_recommendation: "pass" | "fail" | "borderline" | null;
   star: StarOut | null;
   summary_text: string | null;
   details: Record<string, unknown> | null;
