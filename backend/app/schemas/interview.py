@@ -63,3 +63,36 @@ class InterviewStartResponse(BaseModel):
 class InterviewEndResponse(BaseModel):
     job_id: str
     interview: InterviewOut
+
+
+class StarOut(BaseModel):
+    situation: str
+    task: str
+    action: str
+    result: str
+
+
+# REQ-031(개인정보 보호법 제37조의2 자동화된 결정 거부권): 모든 리포트 응답에 고정
+# 문구로 포함한다 — `overall_recommendation`이 권고 등급일 뿐 최종판정이 아님을
+# 매 응답마다 명시한다(03-design §8 "자동화된 결정 금지" 그대로).
+REPORT_DISCLAIMER = "이 결과는 참고용 AI 평가이며, 최종 채용 결정은 인간이 내립니다."
+
+
+class ReportOut(BaseModel):
+    """`GET /interviews/{id}/report` — 지원자([C-11])/채용담당자([R-02]) 공용 캐노니컬
+    응답(03-design §4.2). `report_status=queued`일 때는 이 스키마 대신 202
+    `{status:"processing"}`을 반환한다(인터뷰 라우터 참고).
+    """
+
+    interview_id: UUID
+    report_status: str
+    overall_score: Decimal | None
+    technical_score: int | None
+    communication_score: int | None
+    cultural_fit_score: int | None
+    overall_recommendation: str | None
+    star: StarOut | None
+    # star 파싱 성공 시 null, 실패 시에만 채워지는 폴백 텍스트(§3.1/§4.4).
+    summary_text: str | None
+    details: dict | None
+    disclaimer: str = REPORT_DISCLAIMER

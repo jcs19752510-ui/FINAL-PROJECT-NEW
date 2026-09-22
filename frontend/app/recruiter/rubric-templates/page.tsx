@@ -24,13 +24,33 @@ import {
   readAccessToken,
   updateRubricTemplate,
 } from "@/lib/api";
+import HomeLink from "@/components/HomeLink";
 import styles from "../recruiter.module.css";
 
 function emptyCriterion(): RubricCriterion {
   return { name: "", weight: 0, description: "" };
 }
 
+// 사용자 결정(2026-09-22): 이 화면(템플릿 CRUD 자체는 정상 동작)이 실제 면접
+// 생성/AI 질문 생성/리포트 채점 어디에도 연결되어 있지 않다는 점을 사용자가
+// 직접 발견하고 혼란을 겪어("AI가 질문을 해야 되는데 이게 왜 필요한지") 실제
+// 연동 전까지 화면 자체를 숨기기로 결정함. 코드는 삭제하지 않고 보존한다
+// (나중에 면접 생성/채점 로직과 연결하는 작업을 하면 아래 export만 되돌리면 됨).
 export default function RubricTemplatesPage() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/recruiter");
+  }, [router]);
+  return (
+    <div className="auth-page">
+      <div className="auth-card">리포트 목록으로 이동 중입니다...</div>
+    </div>
+  );
+}
+
+// 실제 면접 생성/채점 로직과 연결하는 작업을 재개할 때 이 컴포넌트를 다시
+// `export default`로 승격하면 된다(named export로 남겨 미사용 경고를 피함).
+export function RubricTemplatesPageDisabledPendingIntegration() {
   const router = useRouter();
   const [accessToken] = useState<string | null>(() => readAccessToken());
 
@@ -179,6 +199,7 @@ export default function RubricTemplatesPage() {
 
   return (
     <div className={styles.page}>
+      <HomeLink />
       <Link href="/recruiter" className={styles.backLink}>
         &larr; 리포트 목록으로
       </Link>

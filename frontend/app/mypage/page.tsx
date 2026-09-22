@@ -25,6 +25,7 @@ import {
   requestBiometricDataDeletion,
   revokeConsent,
 } from "@/lib/api";
+import HomeLink from "@/components/HomeLink";
 import styles from "./mypage.module.css";
 
 const CONSENT_LABELS: Record<ConsentType, string> = {
@@ -145,6 +146,7 @@ export default function MyPage() {
 
   return (
     <div className={styles.page}>
+      <HomeLink />
       <h1>마이페이지</h1>
       <p style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
         동의 이력 관리, 생체정보(음성) 삭제 요청은 여기서 처리할 수 있습니다.

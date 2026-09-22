@@ -207,8 +207,7 @@ export function getOpsHealth(accessToken: string): Promise<OpsHealthOut> {
 }
 
 // REQ-011(unit-12): 03-system-design.md §4.2 `/recruiter/reports`, 04-ux-design.md
-// [R-01]/[R-02]. EVALUATION_REPORTS가 아직 없어(Feature E 미구현) 리포트 상세는
-// `report_available`/`message`로만 상태를 알려준다 — 가짜 점수/추천등급 필드 없음.
+// [R-01]/[R-02].
 export interface RecruiterInterviewListItemOut {
   interview_id: string;
   candidate_name: string;
@@ -220,9 +219,65 @@ export interface RecruiterInterviewListItemOut {
   overall_score: string | null;
 }
 
+// Feature E(REQ-009/010/012): report_available=true일 때만 점수/STAR/추천등급이 채워진다.
+export interface StarOut {
+  situation: string;
+  task: string;
+  action: string;
+  result: string;
+}
+
 export interface RecruiterReportDetailOut extends RecruiterInterviewListItemOut {
   report_available: boolean;
   message: string;
+  technical_score: number | null;
+  communication_score: number | null;
+  cultural_fit_score: number | null;
+  overall_recommendation: "recommend" | "neutral" | "not_recommend" | null;
+  star: StarOut | null;
+  summary_text: string | null;
+  details: Record<string, unknown> | null;
+}
+
+// 캐노니컬 `GET /interviews/{id}/report`(지원자/채용담당자 공용, 03-design §4.2).
+// report_status가 queued면 이 타입이 아니라 {status:"processing"}이 온다 — getReport()가
+// 이를 구분해 반환한다.
+export interface ReportOut {
+  interview_id: string;
+  report_status: "ready";
+  overall_score: string | null;
+  technical_score: number | null;
+  communication_score: number | null;
+  cultural_fit_score: number | null;
+  overall_recommendation: "recommend" | "neutral" | "not_recommend" | null;
+  star: StarOut | null;
+  summary_text: string | null;
+  details: Record<string, unknown> | null;
+  disclaimer: string;
+}
+
+export type ReportResult =
+  | { status: "processing" }
+  | { status: "ready"; report: ReportOut };
+
+export async function getReport(accessToken: string, interviewId: string): Promise<ReportResult> {
+  // 202({status:"processing"})와 200(ReportOut)이 같은 엔드포인트에서 오므로(§4.2),
+  // `request<T>`가 상태코드와 무관하게 ok 응답(200~299)을 그대로 통과시키는 동작을
+  // 활용해 응답 바디의 모양(`status` 필드 존재 여부)으로만 구분한다.
+  const body = await request<{ status?: string } | ReportOut>(`/interviews/${interviewId}/report`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if ("status" in body && body.status === "processing") {
+    return { status: "processing" };
+  }
+  return { status: "ready", report: body as ReportOut };
+}
+
+export function regenerateReport(accessToken: string, interviewId: string): Promise<{ job_id: string }> {
+  return request<{ job_id: string }>(`/interviews/${interviewId}/report/regenerate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
 }
 
 export function getRecruiterReports(accessToken: string): Promise<RecruiterInterviewListItemOut[]> {

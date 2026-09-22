@@ -20,6 +20,7 @@ import {
   getRecruiterReports,
   readAccessToken,
 } from "@/lib/api";
+import HomeLink from "@/components/HomeLink";
 import styles from "./recruiter.module.css";
 
 const STATUS_LABEL: Record<RecruiterInterviewListItemOut["status"], string> = {
@@ -119,9 +120,9 @@ export default function RecruiterDashboardPage() {
 
   return (
     <div className={styles.page}>
+      <HomeLink />
       <div className={styles.detailHeader}>
         <h1 style={{ margin: 0 }}>지원자 리포트 목록</h1>
-        <Link href="/recruiter/rubric-templates">질문지/루브릭 관리</Link>
       </div>
       <p className={styles.subtitle}>단일 조직 내 모든 지원자 면접 세션을 열람할 수 있습니다.</p>
 

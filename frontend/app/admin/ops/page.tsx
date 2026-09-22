@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, getMe, getOpsHealth, readAccessToken, type OpsHealthOut, type UserOut } from "@/lib/api";
+import HomeLink from "@/components/HomeLink";
 
 // REQ-016(unit-18): 04-ux-design.md [O-01] 운영자 모니터링 화면.
 // 5~10초 주기 폴링 사양(§2 [O-01])의 중간값으로 7초를 채택.
@@ -100,6 +101,7 @@ export default function OpsMonitoringPage() {
 
   return (
     <div className="ops-page">
+      <HomeLink />
       <header className="ops-page__header">
         <h1>운영자 모니터링</h1>
         {healthError && <span className="ops-badge ops-badge--error">갱신 실패</span>}
