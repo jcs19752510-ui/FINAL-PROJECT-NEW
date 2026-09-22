@@ -25,6 +25,7 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.security import JWTError, decode_token
@@ -168,7 +169,13 @@ def _authenticate(token: str, interview_id: UUID) -> bool:
 
 @router.websocket("/ws/interviews/{interview_id}")
 async def interview_ws(websocket: WebSocket, interview_id: UUID, token: str = Query(...)) -> None:
-    if not _authenticate(token, interview_id):
+    # 장애 대응(2026-09-22): `_authenticate`는 동기 DB 호출(psycopg 블로킹 I/O)이다.
+    # 이 핸들러는 `async def`라 FastAPI가 자동으로 스레드풀에 위임해주지 않는데
+    # (그건 `def` 라우트에만 적용됨), 여기서 그냥 직접 호출하면 그 블로킹 호출이
+    # 끝날 때까지 프로세스 전체의 단일 asyncio 이벤트 루프가 통째로 멈춘다 —
+    # 동시 WS 연결이 몰리는 상황에서 실제로 백엔드 전체 응답 불능(행)을 일으킨
+    # 근본 원인으로 확인됨. 스레드풀로 넘겨 이벤트 루프를 절대 막지 않게 한다.
+    if not await run_in_threadpool(_authenticate, token, interview_id):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

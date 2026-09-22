@@ -8,9 +8,9 @@
 Pub/Sub(`app/services/ws_publisher.py`) → `app/api/v1/ws.py`의 `redis_relay_loop`을
 거쳐 WebSocket으로 push된다(§4.3 `stage_update`/`turn_result`).
 
-`enqueue_report_generation_job`은 여전히 스텁이다 — 오케스트레이터가 이번 유닛에
-명시적으로 위임한 범위는 `enqueue_turn_job`(및 그 전제인 opening_question)이며,
-리포트 생성(전체 대화 맥락 요약 LLM 호출)은 unit-10(REQ-009/010/012) 범위다.
+**Feature E(리포트 생성, REQ-009/010/012) 추가로 `enqueue_report_generation_job`도
+실제 Celery 전송으로 전환됨** — `app/worker/tasks.py::process_report_generation_job`
+참고.
 
 **큐 최대 길이(50, §1.3) 초과 시 `429 QUEUE_FULL`을 반환하는 로직은 아직 없다** —
 이는 REQ-038(레이트리밋, unit-8)과 겹치는 영역이라 이번 유닛에서 임의로 구현하지
@@ -40,13 +40,18 @@ def enqueue_opening_question_job(interview_id: uuid.UUID) -> str:
 
 
 def enqueue_report_generation_job(interview_id: uuid.UUID) -> str:
-    """`POST /interviews/{id}/end` 성공 직후 호출 (§4.2, §4.4).
+    """`POST /interviews/{id}/end`(및 `/report/regenerate`) 성공 직후 호출 (§4.2, §4.4).
 
-    스텁: 실제 리포트 생성 LLM 호출/워커 로직은 unit-10 범위다. `INTERVIEWS.report_status`는
-    호출부가 `queued`로 설정하지만, 이를 `ready`/`failed`로 전이시키는 실제 워커
-    로직은 이 유닛(unit-7)이 만들지 않는다.
+    Feature E(리포트 생성): `app.worker.tasks.process_report_generation_job`을
+    Celery로 실제 전송한다 — 전체 대화 맥락 요약 LLM 호출 → `EVALUATION_REPORTS`
+    저장 → `INTERVIEWS.report_status` ready/failed 전이까지 그 태스크가 수행한다.
     """
-    return str(uuid.uuid4())
+    result = celery_app.send_task(
+        "app.worker.tasks.process_report_generation_job",
+        args=[str(interview_id)],
+    )
+    register_job(interview_id, result.id)
+    return result.id
 
 
 def enqueue_turn_job(interview_id: uuid.UUID, transcript_id: uuid.UUID) -> str:

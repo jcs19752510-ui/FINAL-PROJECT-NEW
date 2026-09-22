@@ -30,14 +30,22 @@ import logging
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.interview import Interview, InterviewStatus
+from app.models.evaluation_report import EvaluationReport, OverallRecommendation
+from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
 from app.models.transcript import InputMode, Speaker, Transcript
 from app.services import interview_prompts, rag_engine
 from app.services.celery_app import celery_app
-from app.services.llm_engine import LlmGenerationError, TurnLLMOutput, generate_turn_response
+from app.services.llm_engine import (
+    LlmGenerationError,
+    ReportParsingFailed,
+    TurnLLMOutput,
+    generate_report_response,
+    generate_turn_response,
+)
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
 from app.services.ws_publisher import publish_ws_event
@@ -65,6 +73,12 @@ _TRUNCATION_SUFFIX = " …(이하 생략)"
 # 섞여 question_id로 기록됐다. 관측값(무관 질의 최고 0.18, 관련 질의 약 0.53) 사이의
 # 보수적인 중간값을 컷오프로 택했다 — 상세 근거는 unit-7-note.md 재작업 섹션 참고.
 _FOLLOWUP_RAG_MIN_SIMILARITY = 0.30
+
+# 리포트 생성(Feature E)은 턴 처리 이력 창(_HISTORY_WINDOW=8)과 달리 전체 대화를
+# 입력으로 삼는다(03-design §4.4 "TRANSCRIPTS 전체"). 답변 5회 제한(2026-09-21
+# 사용자 요청) 도입 이후 세션당 최대 약 11~12개 턴으로 자연히 짧아졌으나, 그래도
+# 각 줄은 turn 처리와 동일한 컨텍스트 보호 원칙(DEF-005)을 적용해 잘라낸다.
+_REPORT_MAX_LINE_CHARS = 500
 
 
 def _publish_stage(interview_id: uuid.UUID, job_id: str, stage: str) -> None:
@@ -287,5 +301,130 @@ def process_turn_job(self, interview_id: str, transcript_id: str) -> None:
     except Exception:  # noqa: BLE001 — 워커 태스크 최상위 경계, 예외를 삼키지 않고 에러 이벤트로 알림
         logger.exception("turn job 처리 중 예외 발생: interview=%s transcript=%s", interview_id, transcript_id)
         _publish_error(interview_uuid, job_id, "AI_SERVICE_TIMEOUT", "AI 응답 생성 중 오류가 발생했습니다.")
+    finally:
+        db.close()
+
+
+def _save_evaluation_report(
+    db: Session,
+    existing: EvaluationReport | None,
+    interview_id: uuid.UUID,
+    *,
+    technical_score: int | None,
+    communication_score: int | None,
+    cultural_fit_score: int | None,
+    overall_recommendation: OverallRecommendation | None,
+    star_json: dict | None,
+    summary_text: str | None,
+    details_json: dict | None,
+) -> None:
+    """`interview_id` UK 제약(1면접=1리포트)이라 최초 생성/재시도(regenerate) 모두
+    같은 행을 upsert한다 — `existing`이 있으면 갱신, 없으면 새로 만든다.
+    """
+    report = existing if existing is not None else EvaluationReport(interview_id=interview_id)
+    report.technical_score = technical_score
+    report.communication_score = communication_score
+    report.cultural_fit_score = cultural_fit_score
+    report.overall_recommendation = overall_recommendation
+    report.star_json = star_json
+    report.summary_text = summary_text
+    report.details_json = details_json
+    if existing is None:
+        db.add(report)
+
+
+@celery_app.task(name="app.worker.tasks.process_report_generation_job", bind=True)
+def process_report_generation_job(self, interview_id: str) -> None:
+    """`POST /interviews/{id}/end`(및 실패 후 `/report/regenerate`) 직후 enqueue되는
+    job (Feature E, REQ-009/010/012, 03-design §4.2/§4.4).
+
+    전체 `TRANSCRIPTS`를 입력으로 리포트 생성 LLM 호출 → `EVALUATION_REPORTS` upsert →
+    `INTERVIEWS.report_status`를 `ready`/`failed`로 전이 → WS `report_ready`/`error`
+    발행까지 수행한다. 파싱 실패(§4.4 "완전한 job 실패와는 구분")와 서버 호출 자체
+    실패(완전한 job 실패)를 구분해 처리한다.
+    """
+    job_id = self.request.id
+    interview_uuid = uuid.UUID(interview_id)
+    db = SessionLocal()
+    try:
+        interview = db.get(Interview, interview_uuid)
+        if interview is None or interview.status != InterviewStatus.completed:
+            logger.warning("report_generation job 스킵 — 세션 상태 불일치: %s", interview_id)
+            return
+
+        transcripts = db.scalars(
+            select(Transcript).where(Transcript.interview_id == interview_uuid).order_by(Transcript.turn_index)
+        ).all()
+        lines = [
+            f"{'면접관' if t.speaker == Speaker.ai else '지원자'}: "
+            f"{_truncate_for_llm(t.content_text, _REPORT_MAX_LINE_CHARS)}"
+            for t in transcripts
+        ]
+        system_prompt = interview_prompts.build_report_system_prompt()
+        user_message = interview_prompts.format_transcript_for_report(lines)
+
+        existing = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_uuid))
+
+        try:
+            output = generate_report_response(system_prompt, user_message)
+        except ReportParsingFailed as exc:
+            # §4.4 파싱 실패 폴백: star_json/점수 없이 원문을 summary_text에 저장하되
+            # report_status는 그대로 ready로 표시한다(리포트 자체는 존재).
+            _save_evaluation_report(
+                db,
+                existing,
+                interview_uuid,
+                technical_score=None,
+                communication_score=None,
+                cultural_fit_score=None,
+                overall_recommendation=None,
+                star_json=None,
+                summary_text=exc.raw_text,
+                details_json=None,
+            )
+            interview.report_status = ReportStatus.ready
+            interview.overall_score = None
+            db.commit()
+            publish_ws_event(
+                interview_uuid, {"type": "report_ready", "job_id": job_id, "interview_id": interview_id}
+            )
+            return
+        except LlmGenerationError:
+            # 서버 호출 자체 실패(타임아웃 등) — §4.4 "완전한 job 실패"에 해당, failed로 표시.
+            logger.warning("report_generation LLM 호출 실패 — report_status=failed", exc_info=True)
+            interview.report_status = ReportStatus.failed
+            db.commit()
+            _publish_error(interview_uuid, job_id, "REPORT_GENERATION_FAILED", "리포트 생성에 실패했습니다.")
+            return
+
+        overall_score = round(
+            (output.technical_accuracy + output.communication_clarity + output.cultural_fit) / 3, 1
+        )
+        _save_evaluation_report(
+            db,
+            existing,
+            interview_uuid,
+            technical_score=output.technical_accuracy,
+            communication_score=output.communication_clarity,
+            cultural_fit_score=output.cultural_fit,
+            overall_recommendation=OverallRecommendation(output.overall_recommendation),
+            star_json=output.star.model_dump(),
+            summary_text=None,
+            details_json=output.details,
+        )
+        interview.report_status = ReportStatus.ready
+        interview.overall_score = overall_score
+        db.commit()
+        publish_ws_event(interview_uuid, {"type": "report_ready", "job_id": job_id, "interview_id": interview_id})
+    except Exception:  # noqa: BLE001 — 워커 태스크 최상위 경계, 예외를 삼키지 않고 에러 이벤트로 알림
+        logger.exception("report_generation job 처리 중 예외 발생: %s", interview_id)
+        try:
+            interview = db.get(Interview, interview_uuid)
+            if interview is not None:
+                interview.report_status = ReportStatus.failed
+                db.commit()
+        except Exception:  # noqa: BLE001 — 상태 갱신 자체가 실패해도 워커를 죽이지 않음
+            logger.exception("report_status=failed 갱신 중 추가 예외 발생: %s", interview_id)
+        _publish_error(interview_uuid, job_id, "REPORT_GENERATION_FAILED", "리포트 생성 중 오류가 발생했습니다.")
     finally:
         db.close()

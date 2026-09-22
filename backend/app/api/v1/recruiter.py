@@ -7,21 +7,14 @@
 **설계서 대비 편차 (오케스트레이터 지시에 따른 병렬 개발 파일충돌 회피, 규칙 A 대상 아님
 — 정책적 모호함이 아니라 동시성 제약에 의한 결정)**: 03-design §4.2는 리포트 상세를
 지원자 화면([C-11])과 recruiter 화면([R-02])이 `GET /interviews/{id}/report` 하나의
-엔드포인트를 RBAC으로 공유하도록 설계했다. 그러나 이 유닛은 병렬로 개발 중인 다른
-유닛과의 파일 충돌을 피하기 위해 `interviews.py`(및 그 파일을 다루는 다른 진행 중
-작업)를 건드리지 않고 recruiter 전용 신규 파일/엔드포인트로 한정하라는 명시적 지시를
-받았다. 따라서 recruiter 전용 `GET /recruiter/reports/{interview_id}`를 별도로
-신설한다. Feature E(unit-10/11)가 `/interviews/{id}/report`를 구현할 때 이 엔드포인트와의
-중복(리포트 상세 조회 경로가 2개 존재)을 규칙 F로 재확인해 정리(예: 이 엔드포인트를
-canonical 엔드포인트의 recruiter 전용 얇은 래퍼로 축소하거나 프론트를 canonical
-엔드포인트로 전환)할 것을 후속 유닛에 인수인계한다.
-
-**리포트 실측 데이터 부재 (Feature E, unit-10/11 미착수)**: `EVALUATION_REPORTS` 테이블/
-모델이 아직 존재하지 않는다. `INTERVIEWS.report_status`가 `ready`가 되는 실제 경로
-자체도 아직 없다(unit-4/7/10의 `job_queue.py`는 job_id만 발급하는 스텁). 따라서 이
-유닛은 `report_status` 값과 무관하게 리포트 본문 데이터를 반환하지 않고, 상태별로
-정직한 안내 메시지만 반환한다(`report_available=false` 고정 — unit-18의 "가짜 데이터
-금지" 선례를 그대로 따름). `ready` 상태에서도 예외 없이 동일 원칙을 적용한다.
+엔드포인트를 RBAC으로 공유하도록 설계했다. unit-12 당시에는 병렬 개발 파일충돌 회피를
+위해 `interviews.py`를 건드리지 않고 recruiter 전용 엔드포인트로 신설했으나(아래
+`get_report_detail`), **Feature E(REQ-009/010/012)가 캐노니컬 `GET /interviews/{id}/report`
+(`app/api/v1/interviews.py::get_report`)를 실제로 구현하면서, 이 함수는 그 규칙 F
+정리(인수인계 원문 그대로) 그 캐노니컬 로직의 얇은 래퍼로 축소됐다** — recruiter
+전용 URL(`/recruiter/reports/{interview_id}`)은 프런트 하위호환을 위해 유지하되,
+데이터 조회는 `interviews.py`의 `_report_to_out`/`EVALUATION_REPORTS` 조회를
+그대로 재사용한다(중복 구현 금지).
 """
 from uuid import UUID
 
@@ -30,8 +23,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.v1.interviews import _report_to_out
 from app.core.errors import AppError
 from app.db.session import get_db
+from app.models.evaluation_report import EvaluationReport
 from app.models.interview import Interview, ReportStatus
 from app.models.rubric_template import RubricTemplate
 from app.models.user import User, UserRole
@@ -58,10 +53,8 @@ def _report_state_message(report_status: ReportStatus) -> str:
     if report_status == ReportStatus.queued:
         return "리포트를 생성하는 중입니다. 잠시 후 다시 확인해주세요."
     if report_status == ReportStatus.failed:
-        return "리포트 생성에 실패했습니다."
-    # ready: EVALUATION_REPORTS 모델이 없어(Feature E 미구현) 실제 데이터를 조회할
-    # 방법이 없다 — 있는 것처럼 꾸미지 않고 명시적으로 안내한다.
-    return "리포트 상세 데이터 조회 기능은 아직 준비 중입니다(평가 리포트 생성 기능 개발 예정, Feature E)."
+        return "리포트 생성에 실패했습니다. 지원자가 재시도할 수 있습니다."
+    return "리포트가 준비되었습니다."
 
 
 @router.get("/reports", response_model=list[RecruiterInterviewListItemOut])
@@ -112,6 +105,12 @@ def get_report_detail(
         raise AppError(404, "NOT_FOUND", "Not Found", "면접 세션을 찾을 수 없습니다.")
     interview, candidate = row
 
+    report_available = interview.report_status == ReportStatus.ready
+    report = None
+    if report_available:
+        report = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_id))
+    canonical = _report_to_out(interview, report) if report_available else None
+
     return RecruiterReportDetailOut(
         interview_id=interview.id,
         candidate_name=candidate.name,
@@ -121,8 +120,15 @@ def get_report_detail(
         started_at=interview.started_at,
         ended_at=interview.ended_at,
         overall_score=interview.overall_score,
-        report_available=False,
+        report_available=report_available,
         message=_report_state_message(interview.report_status),
+        technical_score=canonical.technical_score if canonical else None,
+        communication_score=canonical.communication_score if canonical else None,
+        cultural_fit_score=canonical.cultural_fit_score if canonical else None,
+        overall_recommendation=canonical.overall_recommendation if canonical else None,
+        star=canonical.star if canonical else None,
+        summary_text=canonical.summary_text if canonical else None,
+        details=canonical.details if canonical else None,
     )
 
 

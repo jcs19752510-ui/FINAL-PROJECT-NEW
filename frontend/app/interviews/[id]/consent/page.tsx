@@ -29,6 +29,7 @@ import {
   startInterview,
 } from "@/lib/api";
 import { PRE_NOTICE_TEXT } from "@/lib/complianceContent";
+import HomeLink from "@/components/HomeLink";
 import styles from "./consent.module.css";
 
 const SCROLL_END_THRESHOLD_PX = 24;
@@ -169,6 +170,7 @@ export default function ConsentNoticePage() {
 
   return (
     <div className={styles.page}>
+      <HomeLink />
       <h1>AI 면접 진행 사전고지 및 동의</h1>
       <p className={styles.subtitle}>
         면접을 시작하기 전, 아래 내용을 끝까지 확인해주세요. AI는 보조 도구이며 최종 채용 결정은

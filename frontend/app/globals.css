@@ -346,6 +346,22 @@ a {
   color: var(--color-primary-700);
 }
 
+/* 사용자 요청(2026-09-22): 로그인 후 화면들에서 뒤로가기를 반복하지 않고도 항상
+   홈으로 갈 수 있어야 한다는 요구 — 정상 렌더 경로(성공 상태)에 누락돼 있던
+   화면들의 상단에 일관되게 배치하는 공용 링크 스타일. */
+.home-link {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  margin-bottom: 12px;
+}
+
+.home-link:hover {
+  color: var(--color-primary-700);
+  text-decoration: underline;
+}
+
 /* 04-ux-design.md [O-01] 운영자 모니터링 화면 (REQ-016) */
 .ops-page {
   max-width: 1200px;
