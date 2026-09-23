@@ -64,12 +64,15 @@ from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.transcript import InputMode, Speaker, Transcript
 from app.models.user import User, UserRole
 from app.schemas.interview import (
+    CriterionScoreOut,
     InterviewDetailOut,
     InterviewEndResponse,
     InterviewListItemOut,
     InterviewOut,
     InterviewStartResponse,
     ReportOut,
+    RubricAnswerOut,
+    RubricOut,
     StarOut,
 )
 from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
@@ -81,6 +84,7 @@ from app.services.prompt_safety import (
     log_injection_attempt,
 )
 from app.services.prosody_engine import ProsodyAnalysisError, analyze_prosody
+from app.services.rubric_defaults import SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID
 from app.services.stt_engine import SttTranscriptionError, transcribe_audio
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
@@ -166,6 +170,9 @@ def create_interview(
         candidate_id=current_user.id,
         status=InterviewStatus.scheduled,
         report_status=ReportStatus.none,
+        # v15(03-system-design v4 §4.6 (2), unit-37): 새 면접은 항상 시스템 기본
+        # 템플릿으로 시작한다. 지원자는 직접 지정할 수 없다(recruiter 전용 API).
+        rubric_template_id=SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID,
     )
     db.add(interview)
     db.commit()
@@ -291,7 +298,60 @@ def _get_report_viewable_interview(interview_id: UUID, current_user: User, db: S
     return interview
 
 
-def _report_to_out(interview: Interview, report: EvaluationReport | None) -> ReportOut:
+def _build_rubric_out(report: EvaluationReport, db: Session) -> RubricOut | None:
+    """v15(03-system-design v4 §4.6 (5), unit-37) — `rubric_snapshot_json`/
+    `criteria_scores_json`에서 응답용 `rubric`을 조립한다. 발췌는 저장하지 않고
+    이 시점에 `answer_map`의 id로 TRANSCRIPTS에서 읽는다(§4.6 (5)). 원문이 삭제된
+    번호는 `answers`에서 빠진다(§4.6 (5), REQ-030과의 상호작용).
+    """
+    if report is None or report.rubric_template_id is None or not report.rubric_snapshot_json:
+        return None
+    snapshot = report.rubric_snapshot_json
+    criteria_defs = snapshot.get("criteria", [])
+    answer_map: dict[str, str] = snapshot.get("answer_map", {})
+    scores_by_name = {s["criterion"]: s for s in (report.criteria_scores_json or [])}
+
+    criteria_out: list[CriterionScoreOut] = []
+    referenced_nos: set[int] = set()
+    for c in criteria_defs:
+        s = scores_by_name.get(c["name"], {})
+        refs = s.get("answer_refs", [])
+        criteria_out.append(
+            CriterionScoreOut(
+                name=c["name"],
+                weight=c.get("weight", 0),
+                description=c.get("description") or "",
+                score=s.get("score"),
+                evidence=s.get("evidence") or "평가 근거 부족",
+                answer_refs=refs,
+            )
+        )
+        referenced_nos.update(refs)
+
+    answers_out: list[RubricAnswerOut] = []
+    id_to_no: dict[UUID, int] = {}
+    for no in referenced_nos:
+        raw_id = answer_map.get(str(no))
+        if raw_id:
+            try:
+                id_to_no[UUID(raw_id)] = no
+            except ValueError:
+                continue
+    if id_to_no:
+        rows = db.scalars(select(Transcript).where(Transcript.id.in_(id_to_no.keys()))).all()
+        for t in rows:
+            answers_out.append(RubricAnswerOut(no=id_to_no[t.id], excerpt=t.content_text[:120]))
+        answers_out.sort(key=lambda a: a.no)
+
+    return RubricOut(
+        template_id=report.rubric_template_id,
+        name=snapshot.get("name", ""),
+        criteria=criteria_out,
+        answers=answers_out,
+    )
+
+
+def _report_to_out(interview: Interview, report: EvaluationReport | None, db: Session) -> ReportOut:
     star = StarOut(**report.star_json) if report is not None and report.star_json else None
     return ReportOut(
         interview_id=interview.id,
@@ -309,6 +369,7 @@ def _report_to_out(interview: Interview, report: EvaluationReport | None) -> Rep
         star=star,
         summary_text=report.summary_text if report else None,
         details=report.details_json if report else None,
+        rubric=_build_rubric_out(report, db) if report is not None else None,
     )
 
 
@@ -337,7 +398,7 @@ def get_report(
         )
 
     report = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_id))
-    return _report_to_out(interview, report)
+    return _report_to_out(interview, report, db)
 
 
 @router.post("/{interview_id}/report/regenerate", status_code=status.HTTP_202_ACCEPTED)

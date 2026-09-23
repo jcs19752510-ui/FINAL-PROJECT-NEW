@@ -51,15 +51,34 @@ _WATCH_KEY_TTL_SECONDS = 600
 _STARTED_TIMEOUT_SECONDS = 150
 _POLL_INTERVAL_SECONDS = 5
 
+# v15(03-system-design v4 §4.6 (3) "작업 감시도 작업 종류별로", unit-37 2차 검증에서
+# 발견): 리포트 job은 턴 job보다 LLM 제한시간이 훨씬 길다(settings.
+# llm_report_timeout_seconds, 기본 300초 vs 턴의 25초). 감시 타임아웃이 턴 기준
+# 150초로 고정돼 있으면, 정상 진행 중인 리포트 job도 150초를 넘기는 순간 "유실"로
+# 오판해 WS `error`를 잘못 보낸다(report_status는 여전히 queued인데 사용자에게는
+# 실패로 보임) — 실측 없이 코드 리뷰로 발견해 즉시 수정.
+_REPORT_TIMEOUT_MARGIN_SECONDS = 60
 
-def register_job(interview_id: uuid.UUID | str, job_id: str) -> None:
-    """`job_queue.py`가 enqueue 직후 호출한다."""
+
+def _report_watch_timeout() -> int:
+    return settings.llm_report_timeout_seconds + _REPORT_TIMEOUT_MARGIN_SECONDS
+
+
+def register_job(interview_id: uuid.UUID | str, job_id: str, *, timeout_seconds: int | None = None) -> None:
+    """`job_queue.py`가 enqueue 직후 호출한다. `timeout_seconds`를 생략하면 턴/오프닝
+    기준 기본값(`_STARTED_TIMEOUT_SECONDS`)을 쓴다 — 리포트 job은
+    `enqueue_report_generation_job`이 `_report_watch_timeout()`을 명시적으로 넘긴다.
+    """
     client = redis.Redis.from_url(settings.redis_url)
     try:
         client.set(
             f"{_WATCH_KEY_PREFIX}{job_id}",
-            json.dumps({"interview_id": str(interview_id), "started_seen_at": None}),
-            ex=_WATCH_KEY_TTL_SECONDS,
+            json.dumps({
+                "interview_id": str(interview_id),
+                "started_seen_at": None,
+                "timeout_seconds": timeout_seconds if timeout_seconds is not None else _STARTED_TIMEOUT_SECONDS,
+            }),
+            ex=max(_WATCH_KEY_TTL_SECONDS, (timeout_seconds or 0) + _POLL_INTERVAL_SECONDS * 2),
         )
     finally:
         client.close()
@@ -88,16 +107,21 @@ async def _check_job(client: aioredis.Redis, key: bytes | str) -> None:
         # PENDING/RETRY 등 — 아직 워커가 못 받았거나 대기 중(AC5). 타임아웃 미적용.
         return
 
+    timeout_seconds = data.get("timeout_seconds", _STARTED_TIMEOUT_SECONDS)
+
     now = time.time()
     if data.get("started_seen_at") is None:
         data["started_seen_at"] = now
-        await client.set(key_str, json.dumps(data), ex=_WATCH_KEY_TTL_SECONDS)
+        await client.set(
+            key_str, json.dumps(data), ex=max(_WATCH_KEY_TTL_SECONDS, timeout_seconds + _POLL_INTERVAL_SECONDS * 2)
+        )
         return
 
-    if now - data["started_seen_at"] > _STARTED_TIMEOUT_SECONDS:
+    if now - data["started_seen_at"] > timeout_seconds:
         logger.warning(
-            "job 처리 중 유실 감지(STARTED 후 %.0fs 무응답) — 실패 통지: job_id=%s",
+            "job 처리 중 유실 감지(STARTED 후 %.0fs 무응답, 기준 %ds) — 실패 통지: job_id=%s",
             now - data["started_seen_at"],
+            timeout_seconds,
             job_id,
         )
         publish_ws_event(
