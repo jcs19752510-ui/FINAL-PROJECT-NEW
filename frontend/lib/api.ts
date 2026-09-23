@@ -269,6 +269,30 @@ export interface RecruiterReportDetailOut extends RecruiterInterviewListItemOut 
   star: StarOut | null;
   summary_text: string | null;
   details: Record<string, unknown> | null;
+  rubric: RubricReportOut | null;
+}
+
+// v15(03-system-design v4 §4.6 (5), unit-37, REQ-010/012): 루브릭 항목별 채점.
+// 이 기능 이전 리포트나 템플릿을 찾지 못한 레거시 경로는 `rubric: null`이다.
+export interface RubricCriterionScore {
+  name: string;
+  weight: number;
+  description: string;
+  score: number | null;
+  evidence: string;
+  answer_refs: number[];
+}
+
+export interface RubricAnswer {
+  no: number;
+  excerpt: string;
+}
+
+export interface RubricReportOut {
+  template_id: string;
+  name: string;
+  criteria: RubricCriterionScore[];
+  answers: RubricAnswer[];
 }
 
 // 캐노니컬 `GET /interviews/{id}/report`(지원자/채용담당자 공용, 03-design §4.2).
@@ -286,6 +310,7 @@ export interface ReportOut {
   star: StarOut | null;
   summary_text: string | null;
   details: Record<string, unknown> | null;
+  rubric: RubricReportOut | null;
   disclaimer: string;
 }
 
@@ -527,5 +552,27 @@ export function updateRubricTemplate(
     method: "PATCH",
     headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify(input),
+  });
+}
+
+// v15(03-system-design v4 §4.6 (2), unit-37, REQ-010/014, DEC-054/055): 면접에
+// 채점용 루브릭 템플릿을 지정/변경한다. `job_id`가 있으면 재채점이 새로 투입된
+// 것이다(04-ux-design [R-02] "이 템플릿으로 다시 채점" 처리 참고). 409/503은
+// 호출부가 `ApiError.status`로 구분해 처리한다.
+export interface RubricTemplateAssignOut {
+  interview_id: string;
+  rubric_template_id: string;
+  job_id: string | null;
+}
+
+export function assignRubricTemplate(
+  accessToken: string,
+  interviewId: string,
+  rubricTemplateId: string,
+): Promise<RubricTemplateAssignOut> {
+  return request<RubricTemplateAssignOut>(`/recruiter/interviews/${interviewId}/rubric-template`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ rubric_template_id: rubricTemplateId }),
   });
 }
