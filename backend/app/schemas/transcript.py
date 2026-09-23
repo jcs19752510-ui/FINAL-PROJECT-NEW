@@ -15,6 +15,17 @@ class TurnCreate(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class VoicePreviewResponse(BaseModel):
+    """POST /interviews/{id}/turns/preview 응답 (unit-36, STT 실시간 스트리밍 미리보기).
+
+    DB에 아무것도 저장하지 않는 순수 조회성 응답이라 `TranscriptOut`과 달리
+    id/turn_index 등이 없다 — 화면에 "지금까지 인식된 텍스트"를 보여주는
+    용도로만 쓰인다.
+    """
+
+    text: str
+
+
 class TranscriptOut(BaseModel):
     id: UUID
     interview_id: UUID
@@ -24,6 +35,9 @@ class TranscriptOut(BaseModel):
     input_mode: str
     content_text: str
     audio_ref: str | None
+    # unit-24(원안 REQ-018/019 축소판, 2026-09-22 사용자 승인) — speaker=user·
+    # input_mode=voice가 아니면 항상 null(분석 실패 시에도 null, 그레이스풀 디그레이드).
+    prosody: dict | None = Field(default=None, validation_alias="prosody_json")
     created_at: datetime
 
     model_config = {"from_attributes": True}

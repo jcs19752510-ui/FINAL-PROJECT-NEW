@@ -44,15 +44,16 @@ LLM(unit-7)이 아직 없어 "AI가 생성한 응답 텍스트" 자체는 존재
 범위가 아니다 — TTS 서비스 자체(텍스트→음성)와 그 결과를 API로 내려받는 경로만
 실제로 완성한다.
 """
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
-from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import get_current_user
 from app.core.errors import AppError
@@ -71,11 +72,20 @@ from app.schemas.interview import (
     ReportOut,
     StarOut,
 )
-from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate
+from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
 from app.services.job_queue import enqueue_opening_question_job, enqueue_report_generation_job, enqueue_turn_job
+from app.services.prompt_safety import (
+    RateLimitExceeded,
+    check_and_increment_preview_rate_limit,
+    check_and_increment_turn_rate_limit,
+    log_injection_attempt,
+)
+from app.services.prosody_engine import ProsodyAnalysisError, analyze_prosody
 from app.services.stt_engine import SttTranscriptionError, transcribe_audio
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
+
+logger = logging.getLogger(__name__)
 
 # unit-5: 설계서에 명시되지 않은 구현 세부값(비가역성 낮음, 상수 하나로 격리). 음성
 # 답변 하나가 이 크기를 넘으면 422로 거부해 대용량 업로드로 메모리를 소모하지 않게
@@ -463,7 +473,19 @@ def _submit_text_turn(interview: Interview, payload: TurnCreate, db: Session) ->
 
     턴 채번은 `app/services/turn_numbering.py`(DEF-002/DEC-035 Q5, `(interview_id,
     turn_index)` 유니크 제약 + 재시도)로 통일한다.
+
+    unit-27(REQ-035/038, AI 안전장치, 2026-09-22 사용자 승인): 레이트리밋(사용자당
+    분당 상한 — interview_id가 아닌 candidate_id 기준인 이유는 prompt_safety.py
+    모듈 주석 참고, 기존 "세션당 턴 5회 제한"과 겹치지 않게 하기 위함)을 먼저
+    검사하고, 인젝션 의심 패턴은 차단 없이 감사 로그만 남긴다(오탐으로 정상
+    답변을 막지 않기 위함).
     """
+    try:
+        check_and_increment_turn_rate_limit(str(interview.candidate_id))
+    except RateLimitExceeded as exc:
+        raise AppError(429, "RATE_LIMIT_EXCEEDED", "Too Many Requests", str(exc)) from exc
+    log_injection_attempt(str(interview.candidate_id), str(interview.id), payload.text)
+
     transcript = insert_transcript_with_retry(
         db,
         interview.id,
@@ -503,6 +525,15 @@ async def _submit_voice_turn(
             "음성으로 답변하려면 생체정보(음성) 수집 동의가 필요합니다.",
         )
 
+    # unit-27(REQ-038, 2026-09-22 사용자 승인): 오디오 파싱/STT를 시작하기 전에
+    # 레이트리밋부터 검사한다 — 한도 초과 요청이 무거운 STT 작업까지 도달하지
+    # 않게 해 자원 낭비를 줄인다(간단한 Redis 카운터 증가만 수행, 오늘 실제
+    # 장애가 있었던 STT/threadpool 로직은 전혀 건드리지 않음).
+    try:
+        check_and_increment_turn_rate_limit(str(current_user.id))
+    except RateLimitExceeded as exc:
+        raise AppError(429, "RATE_LIMIT_EXCEEDED", "Too Many Requests", str(exc)) from exc
+
     try:
         form = await request.form()
     except Exception as exc:  # noqa: BLE001 — 잘못된 multipart 인코딩 등 클라이언트 입력 오류
@@ -537,6 +568,16 @@ async def _submit_voice_turn(
             "Gateway Timeout",
             "음성 인식 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
         ) from exc
+
+    # unit-24(원안 REQ-018/019 축소판, Prosody 분석, 2026-09-22 사용자 승인): STT와
+    # 동일하게 동기 CPU 작업이라 반드시 threadpool로 위임한다(위 "장애 대응" 주석과
+    # 동일 원칙 — 블로킹 재발 방지). 실패해도 턴 저장 자체는 막지 않는 선택적 부가
+    # 분석이므로 별도 예외를 상위로 전파하지 않고 그레이스풀 디그레이드한다.
+    prosody_json: dict | None = None
+    try:
+        prosody_json = await run_in_threadpool(analyze_prosody, audio_bytes)
+    except ProsodyAnalysisError:
+        logger.warning("prosody 분석 실패 — 그레이스풀 디그레이드(턴 저장에는 영향 없음)", exc_info=True)
     finally:
         # §6.2 최소수집: 이 스코프를 벗어나면 audio_bytes를 참조하는 곳이 없어 GC
         # 대상이 된다 — 별도 임시파일을 만들지 않았으므로 파기할 파일 자체가 없다.
@@ -550,6 +591,8 @@ async def _submit_voice_turn(
             "음성에서 텍스트를 인식하지 못했습니다. 다시 녹음해주세요.",
         )
 
+    log_injection_attempt(str(interview.candidate_id), str(interview.id), text)
+
     transcript = await run_in_threadpool(
         insert_transcript_with_retry,
         db,
@@ -561,6 +604,7 @@ async def _submit_voice_turn(
             input_mode=InputMode.voice,
             content_text=text,
             audio_ref=None,
+            prosody_json=prosody_json,
         ),
     )
 
@@ -603,6 +647,92 @@ async def submit_turn(
     except ValidationError as exc:
         raise AppError(422, "VALIDATION_ERROR", "Validation Error", str(exc.errors())) from exc
     return await run_in_threadpool(_submit_text_turn, interview, payload, db)
+
+
+@router.post(
+    "/{interview_id}/turns/preview",
+    response_model=VoicePreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def submit_voice_preview(
+    interview_id: UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> VoicePreviewResponse:
+    """REQ-004 축소판(unit-36, STT 실시간 스트리밍 미리보기, 2026-09-23 사용자 승인).
+
+    지원자가 답변을 녹음하는 "도중"(아직 최종 제출 전) 약 4초 간격으로 짧은
+    오디오 조각을 이 엔드포인트로 보내면, STT로만 변환해 텍스트를 즉시
+    돌려준다 — 화면에 "지금까지 인식된 답변" 미리보기를 보여주기 위함이다.
+
+    **기존 `_submit_voice_turn`(오늘 실제 장애가 있었던 경로)은 전혀 건드리지
+    않는다** — 별도 엔드포인트로 완전히 분리했다:
+    - `TRANSCRIPTS`에 아무것도 저장하지 않는다(순수 조회성, 최종 제출이 아님).
+    - AI 응답 생성 job을 큐에 넣지 않는다.
+    - prosody 분석을 하지 않는다(최종 제출 시에만 의미 있음, 매 4초마다 돌리면
+      자원 낭비).
+    - 별도의 더 여유로운 레이트리밋(`check_and_increment_preview_rate_limit`)을
+      쓴다 — 정식 턴 레이트리밋(분당 10회)을 쓰면 답변 하나 녹음하는 도중에도
+      바로 429가 나기 때문.
+    - 인식 결과가 빈 문자열이어도(무음 구간 등) 422로 거부하지 않고 빈 문자열
+      그대로 반환한다 — 최종 제출과 달리 "이 조각에는 말이 없었다"가 정상 상태.
+    """
+    interview = await run_in_threadpool(_get_own_interview, interview_id, current_user, db)
+    if interview.status != InterviewStatus.live:
+        raise AppError(
+            409,
+            "VALIDATION_ERROR",
+            "Conflict",
+            f"live 상태의 세션에만 미리보기를 요청할 수 있습니다 (현재 상태: {interview.status.value}).",
+        )
+
+    if not await run_in_threadpool(_has_active_consent, db, current_user.id, ConsentType.biometric_voice):
+        raise AppError(
+            403,
+            "CONSENT_REQUIRED_VOICE",
+            "Forbidden",
+            "음성 미리보기를 사용하려면 생체정보(음성) 수집 동의가 필요합니다.",
+        )
+
+    try:
+        check_and_increment_preview_rate_limit(str(current_user.id))
+    except RateLimitExceeded as exc:
+        raise AppError(429, "RATE_LIMIT_EXCEEDED", "Too Many Requests", str(exc)) from exc
+
+    try:
+        form = await request.form()
+    except Exception as exc:  # noqa: BLE001 — 잘못된 multipart 인코딩 등 클라이언트 입력 오류
+        raise AppError(422, "VALIDATION_ERROR", "Validation Error", "multipart 형식이 올바르지 않습니다.") from exc
+
+    audio = form.get("audio")
+    if audio is None or not hasattr(audio, "read"):
+        raise AppError(422, "VALIDATION_ERROR", "Validation Error", "음성 파일(`audio` 필드)이 필요합니다.")
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        # 최종 제출과 달리 조용히 빈 텍스트를 돌려준다 — 미리보기 조각 하나가
+        # 비어있는 건 정상적인 무음 구간일 수 있다.
+        return VoicePreviewResponse(text="")
+    if len(audio_bytes) > MAX_VOICE_UPLOAD_BYTES:
+        raise AppError(
+            422,
+            "VALIDATION_ERROR",
+            "Validation Error",
+            f"음성 조각이 너무 큽니다 (최대 {MAX_VOICE_UPLOAD_BYTES // (1024 * 1024)}MB).",
+        )
+
+    try:
+        text = await run_in_threadpool(transcribe_audio, audio_bytes)
+    except SttTranscriptionError:
+        # 미리보기는 부가 기능이라 STT가 실패해도 사용자 작업을 막지 않는다
+        # (그레이스풀 디그레이드 — 다음 4초 조각에서 다시 시도됨).
+        logger.warning("음성 미리보기 STT 실패 — 그레이스풀 디그레이드", exc_info=True)
+        return VoicePreviewResponse(text="")
+    finally:
+        del audio_bytes
+
+    return VoicePreviewResponse(text=text)
 
 
 @router.get("/{interview_id}/transcripts", response_model=list[TranscriptOut], status_code=status.HTTP_200_OK)

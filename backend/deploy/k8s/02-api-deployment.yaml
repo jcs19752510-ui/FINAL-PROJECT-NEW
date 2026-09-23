@@ -1,0 +1,89 @@
+# unit-30 — API 서버(FastAPI/uvicorn). GPU 불필요 — Celery 워커(03-worker.yaml)와
+# 분리된 이유는 API 프로세스 자체는 STT/LLM/TTS를 직접 호출하지 않고 job을
+# 큐에 넣기만 하기 때문(03-system-design.md §1.2/§1.3 그대로).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api
+  namespace: mock-interview
+spec:
+  replicas: 2  # API 자체는 상태 없음(stateless) — 수평 확장 가능. Celery 워커와 달리 GPU 제약 없음.
+  selector:
+    matchLabels:
+      app: backend-api
+  template:
+    metadata:
+      labels:
+        app: backend-api
+    spec:
+      containers:
+        - name: backend-api
+          image: REPLACE_ME_REGISTRY/mock-interview-backend:REPLACE_ME_TAG
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "512Mi" }
+          volumeMounts:
+            - name: media-storage
+              mountPath: /app/var/media
+      volumes:
+        - name: media-storage
+          persistentVolumeClaim:
+            claimName: media-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-api
+  namespace: mock-interview
+spec:
+  selector:
+    app: backend-api
+  ports:
+    - port: 80
+      targetPort: 8000
+---
+# API는 stateless라 오토스케일 가능 — ③ 매트릭스 "K8s/클라우드 배포" 항목의
+# "가능" 판정 중 이 부분(API 계층)은 실제로 유효하다. 단, 아래 03-worker.yaml의
+# 주석 참고: 이 HPA가 있어도 Celery 워커(GPU 싱글턴)가 전체 처리량의 병목이라
+# API만 늘리는 것으로는 원안의 "500명 동시접속" 목표를 달성하지 못한다
+# (traceability ③ 매트릭스 "500명 동시접속 처리" 항목 — 여전히 "개발 불가"로
+# 남아있는 이유 그대로, 이 매니페스트가 그 결론을 바꾸지 않는다).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-api-hpa
+  namespace: mock-interview
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

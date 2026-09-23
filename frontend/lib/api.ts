@@ -166,6 +166,35 @@ export async function submitVoiceTurn(
   return res.json() as Promise<TurnAcceptedResponse>;
 }
 
+// unit-36(STT 실시간 스트리밍 미리보기, 2026-09-23 사용자 승인): 답변을 녹음하는
+// "도중"에 짧은 오디오 조각을 보내 인식 텍스트 미리보기만 받는다 — 최종 제출
+// (`submitVoiceTurn`)과 별개 엔드포인트라 실패해도 최종 제출에는 영향 없다.
+export async function submitVoicePreview(
+  accessToken: string,
+  interviewId: string,
+  audioBlob: Blob,
+): Promise<{ text: string }> {
+  const formData = new FormData();
+  formData.append("audio", audioBlob, "preview.webm");
+
+  const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/turns/preview`, {
+    method: "POST",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(
+      res.status,
+      body?.code ?? "UNKNOWN_ERROR",
+      body?.detail ?? "요청 처리 중 오류가 발생했습니다.",
+    );
+  }
+  return res.json() as Promise<{ text: string }>;
+}
+
 // 03-system-design.md §4.3: WS는 `/api/v1` 프리픽스 없이 `/ws/interviews/{id}`이며,
 // 토큰은 Authorization 헤더 대신 쿼리 파라미터로 전달한다(브라우저 WebSocket API가
 // 커스텀 헤더를 지원하지 않음, backend/app/api/v1/ws.py 참고).

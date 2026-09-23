@@ -62,8 +62,20 @@ class EvaluationReport(Base):
     )
     # 원안 복원분(위 모듈 docstring "pass_fail_recommendation" 참고) — REPORT_DISCLAIMER
     # 없이 단독 노출 금지.
+    #
+    # 2026-09-22 실측 결함: SQLAlchemy `Enum(PythonEnum)`은 기본적으로 멤버 "이름"을
+    # DB에 저장한다(OverallRecommendation처럼 이름==값이면 무해했으나, `pass_fail_
+    # recommendation`은 멤버명이 `pass_`인데 값은 "pass"라 이름≠값 — 기본 설정으로
+    # INSERT 시 "pass_"를 넣으려다 DB enum 라벨("pass")과 불일치해
+    # `InvalidTextRepresentation`이 실제로 발생함을 확인). `values_callable`로 값
+    # 기준 직렬화를 명시해 해결.
     pass_fail_recommendation: Mapped[PassFailRecommendation | None] = mapped_column(
-        Enum(PassFailRecommendation, name="pass_fail_recommendation"), nullable=True
+        Enum(
+            PassFailRecommendation,
+            name="pass_fail_recommendation",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=True,
     )
     # {"situation": str, "task": str, "action": str, "result": str} — §4.4. 파싱
     # 성공 시에만 채워지고, 실패 시 null(그 경우 summary_text가 폴백으로 채워짐).
