@@ -48,3 +48,16 @@ class WhiteboardSnapshotOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class WhiteboardAnalysisOut(BaseModel):
+    """unit-35(REQ-021 부분 재도입, 2026-09-23) — 로컬 SmolVLM 비전 분석 응답.
+
+    `disclaimer`는 선택 필드가 아니라 항상 채워진다(모델 품질이 낮다는 실측
+    근거에 따른 필수 고지, whiteboard_vision.py의 `LOW_CONFIDENCE_DISCLAIMER`
+    참고) — 프론트가 실수로 누락해도 API 계약상 항상 내려온다.
+    """
+
+    analysis: str
+    disclaimer: str
+    model: str = "SmolVLM-500M-Instruct (local)"

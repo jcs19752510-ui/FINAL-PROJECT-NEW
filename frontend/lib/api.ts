@@ -507,6 +507,22 @@ export function getWhiteboard(
   });
 }
 
+// unit-35(REQ-021 부분 재도입, 2026-09-23): 로컬 SmolVLM(무료) 비전 분석.
+// disclaimer는 항상 채워져 내려온다(whiteboard_vision.py LOW_CONFIDENCE_DISCLAIMER) —
+// 모델 품질이 낮다는 실측 근거에 따른 필수 고지이므로 화면에서 생략하면 안 된다.
+export interface WhiteboardAnalysisOut {
+  analysis: string;
+  disclaimer: string;
+  model: string;
+}
+
+export function analyzeWhiteboard(accessToken: string, interviewId: string): Promise<WhiteboardAnalysisOut> {
+  return request<WhiteboardAnalysisOut>(`/interviews/${interviewId}/whiteboard/analyze`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
 // REQ-014(unit-13): 03-system-design.md §3.1(RUBRIC_TEMPLATES)/§4.2
 // `/recruiter/rubric-templates`, 04-ux-design.md [R-03]. `recruiter_id`가 null이면
 // 시스템 기본 템플릿(모든 recruiter가 조회 가능, 직접 수정은 불가 — 복사해서 새로
