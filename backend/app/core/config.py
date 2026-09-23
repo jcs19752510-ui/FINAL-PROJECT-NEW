@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # 운영(Nginx TLS 종단, 03-system-design.md §6.4)에서는 반드시 True.
     # 로컬 개발 서버가 http인 동안은 브라우저가 Secure 쿠키를 저장하지 않으므로 False로 둔다.
     cookie_secure: bool = True
+    # unit-25(원안 REQ-N-003 축소판, 저장 시 AES-256 암호화, 2026-09-22 사용자 승인):
+    # base64 인코딩된 32바이트 키(app/services/field_encryption.py). 로컬 개발 전용
+    # 플레이스홀더 — 운영 배포 전 반드시 KMS/Vault 등 안전한 키 관리로 교체 필요.
+    field_encryption_key: str = "3Rc9k21J4zYUNiDgSlmcPrFpZ2ESFUzeK9aEN16oyUU="
 
     @property
     def cors_origin_list(self) -> list[str]:

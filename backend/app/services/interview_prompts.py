@@ -123,6 +123,14 @@ def _korean_ratio(text: str) -> float:
     return korean / len(letters)
 
 
+def contains_persona_leak_marker(text: str) -> bool:
+    """unit-27(REQ-039 감사 로그, 2026-09-22 사용자 승인)이 "품질 가드 실패" 중
+    구체적으로 "시스템 프롬프트 유출"에 해당하는 경우만 골라 감사 로그를 남기기
+    위해 `validate_followup_speak_text` 내부 검사 중 이 항목만 별도로 노출한다.
+    """
+    return any(marker in text for marker in _PERSONA_LEAK_MARKERS)
+
+
 def validate_followup_speak_text(speak_text: str) -> bool:
     """후속 꼬리질문 `speak_text`가 4가지 조건을 모두 만족하는지 검사한다
     (DEC-035 Q1 "가드 추가" 채택안): 질문형 여부, 플레이스홀더 없음, 한국어 비율,
