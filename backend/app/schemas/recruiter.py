@@ -14,7 +14,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from app.schemas.interview import StarOut
+from app.schemas.interview import RubricOut, StarOut
 
 
 class RecruiterInterviewListItemOut(BaseModel):
@@ -47,3 +47,6 @@ class RecruiterReportDetailOut(BaseModel):
     star: StarOut | None = None
     summary_text: str | None = None
     details: dict | None = None
+    # v15(03-system-design v4 §4.6 (5), unit-37) — [R-02]도 [C-11]과 같은 루브릭
+    # 섹션을 쓴다(04-ux-design.md [C-11]/[R-02] 공통 명세).
+    rubric: RubricOut | None = None

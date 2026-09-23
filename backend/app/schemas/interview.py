@@ -72,6 +72,36 @@ class StarOut(BaseModel):
     result: str
 
 
+class CriterionScoreOut(BaseModel):
+    """v15(03-system-design v4 §4.6 (5), unit-37) — 루브릭 항목 1개의 채점 결과.
+    `score`는 서버 검증(worker/tasks.py::_validate_criteria_scores)을 통과한 값만
+    들어오므로 항상 1~5 또는 null이다.
+    """
+
+    name: str
+    weight: int
+    description: str
+    score: int | None
+    evidence: str
+    answer_refs: list[int]
+
+
+class RubricAnswerOut(BaseModel):
+    """§4.6 (5) `answers` — `answer_refs`로 참조된 답변만 발췌로 내려준다."""
+
+    no: int
+    excerpt: str
+
+
+class RubricOut(BaseModel):
+    """§4.6 (5) 응답 `rubric` 필드. 이 기능 이전 리포트는 `rubric=None`(하위 호환)."""
+
+    template_id: UUID
+    name: str
+    criteria: list[CriterionScoreOut]
+    answers: list[RubricAnswerOut]
+
+
 # REQ-031(개인정보 보호법 제37조의2 자동화된 결정 거부권): 모든 리포트 응답에 고정
 # 문구로 포함한다 — `overall_recommendation`이 권고 등급일 뿐 최종판정이 아님을
 # 매 응답마다 명시한다(03-design §8 "자동화된 결정 금지" 그대로).
@@ -98,4 +128,7 @@ class ReportOut(BaseModel):
     # star 파싱 성공 시 null, 실패 시에만 채워지는 폴백 텍스트(§3.1/§4.4).
     summary_text: str | None
     details: dict | None
+    # v15(03-system-design v4 §4.6 (5), unit-37, REQ-010/012) — 이 기능 이전 리포트,
+    # 템플릿을 못 찾은 경우(레거시), 파싱 실패 폴백 경로는 None(하위 호환).
+    rubric: RubricOut | None = None
     disclaimer: str = REPORT_DISCLAIMER

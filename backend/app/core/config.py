@@ -22,6 +22,19 @@ class Settings(BaseSettings):
     # base64 인코딩된 32바이트 키(app/services/field_encryption.py). 로컬 개발 전용
     # 플레이스홀더 — 운영 배포 전 반드시 KMS/Vault 등 안전한 키 관리로 교체 필요.
     field_encryption_key: str = "3Rc9k21J4zYUNiDgSlmcPrFpZ2ESFUzeK9aEN16oyUU="
+    # unit-37(03-system-design v4 §4.6, 2026-09-23 기준선 실측 결함 해소): 리포트
+    # 생성은 턴 응답(25초 고정)과 제한시간을 공유하면 저사양 환경(GPU 없는 PC 등)에서
+    # 항상 타임아웃으로 실패한다(unit-37-test.md 기준선 실측). 리포트는 비동기 job이라
+    # 여유를 둔다.
+    llm_report_timeout_seconds: int = 300
+    # unit-32/DEC-057(2026-09-23, 사용자 제공 키로 실측 검증): 벤더 어댑터는
+    # `app/services/stt_adapter_deepgram.py`/`tts_adapter_elevenlabs.py`/
+    # `whiteboard_vision.py`에 함수로만 존재하고 아직 어떤 API 엔드포인트에도
+    # 배선되지 않았다(운영 경로는 여전히 로컬 faster-whisper/Piper, DEC-005).
+    # 키가 없으면 None — 미검증 상태를 코드로도 드러낸다(가짜 진행률 금지 원칙).
+    deepgram_api_key: str | None = None
+    elevenlabs_api_key: str | None = None
+    openai_api_key: str | None = None
 
     @property
     def cors_origin_list(self) -> list[str]:

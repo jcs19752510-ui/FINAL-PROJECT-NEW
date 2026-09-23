@@ -34,6 +34,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -233,6 +235,26 @@ class StarOutput(BaseModel):
         return data
 
 
+class CriterionScoreLLM(BaseModel):
+    """v15(03-system-design v4 §4.6 (3)) 리포트 출력의 항목별 채점 1건. 이 단계에서는
+    최소 타입만 강제하고, 템플릿 항목명 일치·점수 범위·근거 길이·답변번호 유효성
+    검증은 worker/tasks.py가 템플릿을 알고 있는 시점에 수행한다(이 모듈은 어떤
+    템플릿이 쓰였는지 모른다 — 어댑터 경계 원칙, §4.5).
+    """
+
+    criterion: str = ""
+    score: int | None = None
+    evidence: str = ""
+    answer_refs: list[int] = Field(default_factory=list)
+
+    @field_validator("answer_refs", mode="before")
+    @classmethod
+    def _coerce_answer_refs(cls, v):
+        if not isinstance(v, list):
+            return []
+        return [x for x in v if isinstance(x, int)]
+
+
 class ReportLLMOutput(BaseModel):
     """03-system-design.md §4.4 리포트 생성(`report_generation` job) 구조화 출력 계약 그대로.
 
@@ -250,6 +272,20 @@ class ReportLLMOutput(BaseModel):
     # 깨지지 않는다(overall_recommendation 3단계가 여전히 1차 방어선).
     pass_fail_recommendation: Literal["pass", "fail", "borderline"] | None = None
     details: dict = Field(default_factory=dict)
+    # v15(원안 REQ-010/012, 03-system-design v4 §4.6 (3), unit-37). 선택 필드 —
+    # 모델이 생략하거나 스키마를 어겨도 리포트 자체는 깨지지 않는다(worker/tasks.py의
+    # 서버 검증이 최종 방어선, 여기서는 최소 타입만 강제).
+    criteria_scores: list[CriterionScoreLLM] = Field(default_factory=list)
+
+    @field_validator("criteria_scores", mode="before")
+    @classmethod
+    def _coerce_criteria_scores(cls, v):
+        # 모델이 object 하나로 주거나 완전히 다른 타입을 주는 경우, details와 같은
+        # 원칙으로 리포트 전체를 깨뜨리지 않고 빈 목록으로 대체한다(worker가 이후
+        # criteria_scores 없음으로 처리 — §4.6 (3) "부분 실패 격리").
+        if not isinstance(v, list):
+            return []
+        return v
 
     @field_validator("details", mode="before")
     @classmethod
@@ -261,7 +297,30 @@ class ReportLLMOutput(BaseModel):
         return v
 
 
-def _call_chat_completions(system_prompt: str, user_message: str, max_tokens: int = 300) -> str:
+def count_tokens(text: str) -> int:
+    """llama-server `/tokenize`로 실제 토큰 수를 센다(03-system-design v4 §4.6 (3)
+    "토큰 수는 실측으로 계산" — 글자 수 추정 대신 실측치를 쓴다). 서버가 아직 기동
+    전이면 `_ensure_server_running()`이 먼저 기동을 시도한다.
+    """
+    _ensure_server_running()
+    payload = json.dumps({"content": text}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{_SERVER_PORT}/tokenize",
+        data=payload,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return len(body["tokens"])
+    except (urllib.error.URLError, TimeoutError, OSError, KeyError) as exc:
+        raise LlmGenerationError("토큰 수 계산에 실패했습니다.") from exc
+
+
+def _call_chat_completions(
+    system_prompt: str, user_message: str, max_tokens: int = 300, timeout: int = _GENERATION_TIMEOUT_SECONDS
+) -> str:
     """llama-server의 `/v1/chat/completions`(OpenAI 호환 API)를 호출한다.
 
     **역할 분리(03-design §6.3 프롬프트 인젝션 방어 — 이 유닛이 최소한으로 갖추는
@@ -294,7 +353,7 @@ def _call_chat_completions(system_prompt: str, user_message: str, max_tokens: in
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=_GENERATION_TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise LlmGenerationError("LLM 서버 호출에 실패했습니다.") from exc
@@ -337,22 +396,51 @@ class ReportParsingFailed(Exception):
 
 
 # 03-design §4.4: STAR 4개 필드 + 근거(details)까지 요구해 턴 처리(300 토큰)보다
-# 출력이 길다 — 컨텍스트(4096 토큰) 안에서 충분한 여유를 둔 값(실측 근거 없음,
-# 이번 유닛의 구현 세부값).
-_REPORT_MAX_TOKENS = 700
+# v15(03-system-design v4 §4.6 (3) "출력 한도는 항목 수에 비례") — 고정값이던 700을
+# STAR+점수 기본분 + 항목당 근거 출력분으로 대체한다. 항목이 많을 때 JSON이 중간에
+# 잘려 리포트 전체가 파싱 실패로 떨어지는 것을 막기 위함(2026-09-23 설계 재작업).
+_REPORT_BASE_MAX_TOKENS = 400
+_REPORT_TOKENS_PER_CRITERION = 60
+_REPORT_MAX_CRITERIA = 20
 
 
-def generate_report_response(system_prompt: str, user_message: str) -> ReportLLMOutput:
+def report_max_tokens(criteria_count: int) -> int:
+    n = min(max(criteria_count, 0), _REPORT_MAX_CRITERIA)
+    return _REPORT_BASE_MAX_TOKENS + n * _REPORT_TOKENS_PER_CRITERION
+
+
+# 시스템 프롬프트·chat template 오버헤드용 여유분(실측 근거 없음, 안전 마진).
+_CONTEXT_SAFETY_MARGIN_TOKENS = 200
+
+
+def available_input_tokens(output_tokens: int) -> int:
+    """v15(03-system-design v4 §4.6 (3) "입력 길이 예산") — 컨텍스트(4096)에서 출력
+    예약분과 안전 여유를 뺀, 대화 기록이 쓸 수 있는 토큰 수. worker/tasks.py가 이
+    값을 넘지 않도록 중간 발화를 줄인다.
+    """
+    return max(_CONTEXT_SIZE - output_tokens - _CONTEXT_SAFETY_MARGIN_TOKENS, 256)
+
+
+def generate_report_response(
+    system_prompt: str, user_message: str, *, max_tokens: int | None = None
+) -> ReportLLMOutput:
     """03-design §4.4 리포트 생성 구조화 출력. 파싱 실패 시 최대 1회 재시도(턴 처리와
     동일 원칙) 후에도 실패하면 `ReportParsingFailed(raw_text=...)`를 던져 호출부가
     §3.1 `summary_text` 폴백 경로를 적용하게 한다. 서버 호출 자체가 실패하면(타임아웃
     등) `_call_chat_completions`가 던지는 `LlmGenerationError`가 그대로 전파된다 —
     이 경우는 파싱 폴백이 아니라 완전한 job 실패로 다뤄야 한다(호출부 책임).
+
+    `max_tokens`를 생략하면 항목 없는 레거시 기본값(`report_max_tokens(0)`)을 쓴다.
+    제한시간은 턴 응답(25초)과 분리된 `settings.llm_report_timeout_seconds`를 쓴다
+    (§4.6 (3) "리포트 전용 제한시간" — 저사양 환경 실측 기준선 결함 해소, DEC-055).
     """
+    tokens = max_tokens if max_tokens is not None else report_max_tokens(0)
     raw = ""
     last_error: Exception | None = None
     for attempt in range(2):
-        raw = _call_chat_completions(system_prompt, user_message, max_tokens=_REPORT_MAX_TOKENS)
+        raw = _call_chat_completions(
+            system_prompt, user_message, max_tokens=tokens, timeout=settings.llm_report_timeout_seconds
+        )
         try:
             return ReportLLMOutput.model_validate_json(raw)
         except (ValidationError, json.JSONDecodeError) as exc:

@@ -82,4 +82,18 @@ class EvaluationReport(Base):
     star_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     details_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # v15(원안 REQ-010/012 반영, 03-system-design v4 §4.6, unit-37, 2026-09-23
+    # 사용자 승인 DEC-054/055): 루브릭 템플릿 기반 항목별 채점.
+    rubric_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rubric_templates.id", ondelete="SET NULL"), nullable=True
+    )
+    # {"template_id": str, "name": str, "criteria": [{"name","weight","description"}],
+    #  "answer_map": {"1": "<transcript uuid>", ...}} — §4.6 (4). 템플릿은 나중에
+    # PATCH로 바뀔 수 있으므로 채점 시점 기준을 스냅샷으로 보존한다. answer_map은
+    # 답변 번호가 삭제 요청 이후에도 항상 같은 원본 발화를 가리키게 한다.
+    rubric_snapshot_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # [{"criterion","score"(1~5|null),"evidence","answer_refs":[int]}] — 서버 검증을
+    # 거친 값만 저장(§4.6 (3) "서버 검증"). REQ-036 새니타이즈 대상(렌더링은 JSX
+    # 텍스트 보간만, dangerouslySetInnerHTML 금지 — report/page.tsx 동일 원칙).
+    criteria_scores_json: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

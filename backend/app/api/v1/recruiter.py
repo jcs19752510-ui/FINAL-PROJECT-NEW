@@ -32,10 +32,13 @@ from app.models.rubric_template import RubricTemplate
 from app.models.user import User, UserRole
 from app.schemas.recruiter import RecruiterInterviewListItemOut, RecruiterReportDetailOut
 from app.schemas.rubric_template import (
+    RubricTemplateAssignIn,
+    RubricTemplateAssignOut,
     RubricTemplateCreateIn,
     RubricTemplateOut,
     RubricTemplateUpdateIn,
 )
+from app.services.job_queue import MAX_QUEUE_LENGTH, enqueue_report_generation_job, queue_length
 
 router = APIRouter(prefix="/recruiter", tags=["recruiter"])
 
@@ -109,7 +112,7 @@ def get_report_detail(
     report = None
     if report_available:
         report = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_id))
-    canonical = _report_to_out(interview, report) if report_available else None
+    canonical = _report_to_out(interview, report, db) if report_available else None
 
     return RecruiterReportDetailOut(
         interview_id=interview.id,
@@ -130,6 +133,7 @@ def get_report_detail(
         star=canonical.star if canonical else None,
         summary_text=canonical.summary_text if canonical else None,
         details=canonical.details if canonical else None,
+        rubric=canonical.rubric if canonical else None,
     )
 
 
@@ -224,3 +228,64 @@ def update_rubric_template(
     db.commit()
     db.refresh(template)
     return _rubric_template_to_out(template)
+
+
+@router.put("/interviews/{interview_id}/rubric-template", response_model=RubricTemplateAssignOut)
+def assign_rubric_template(
+    interview_id: UUID,
+    payload: RubricTemplateAssignIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RubricTemplateAssignOut:
+    """v15(03-system-design v4 §4.6 (2), unit-37, REQ-010/014, DEC-054/055): 면접에
+    채점용 루브릭 템플릿을 지정한다. 리포트가 이미 `ready`/`failed`면 새 템플릿으로
+    재채점 job을 투입한다(202에 준하는 의미로 `job_id`를 채워 반환, 응답 status 자체는
+    200 — 04-ux-design [R-02]가 `job_id` 유무로 "채점 중" 전환 여부를 판단).
+    """
+    _require_recruiter(current_user)
+
+    interview = db.get(Interview, interview_id)
+    if interview is None:
+        raise AppError(404, "NOT_FOUND", "Not Found", "면접 세션을 찾을 수 없습니다.")
+
+    template = db.get(RubricTemplate, payload.rubric_template_id)
+    if template is None:
+        raise AppError(404, "NOT_FOUND", "Not Found", "템플릿을 찾을 수 없습니다.")
+    if template.recruiter_id is not None and template.recruiter_id != current_user.id:
+        raise AppError(
+            403, "AUTH_FORBIDDEN", "Forbidden", "본인이 만든 템플릿 또는 기본 템플릿만 지정할 수 있습니다."
+        )
+
+    if interview.rubric_template_id == template.id:
+        return RubricTemplateAssignOut(interview_id=interview.id, rubric_template_id=template.id, job_id=None)
+
+    if interview.report_status == ReportStatus.queued:
+        raise AppError(
+            409, "VALIDATION_ERROR", "Conflict", "이미 채점이 진행 중입니다. 완료된 뒤 다시 시도해 주세요."
+        )
+
+    job_id: str | None = None
+    if interview.report_status in (ReportStatus.ready, ReportStatus.failed):
+        # §4.6 (2) "남용 제한" — 재채점은 새로 만드는 경로이므로 여기서만 큐 상한을
+        # 직접 확인한다(job_queue.py 모듈 docstring, 기존 턴/종료 경로는 범위 밖).
+        try:
+            if queue_length() >= MAX_QUEUE_LENGTH:
+                raise AppError(
+                    503,
+                    "QUEUE_FULL",
+                    "Service Unavailable",
+                    "지금 처리 대기 중인 작업이 많습니다. 잠시 후 다시 시도해 주세요.",
+                )
+        except AppError:
+            raise
+        except Exception:  # noqa: BLE001 — Redis 순간 오류는 "확인 불가 → 허용"(job_queue.py queue_length 참고)
+            pass
+        interview.rubric_template_id = template.id
+        interview.report_status = ReportStatus.queued
+        db.commit()
+        job_id = enqueue_report_generation_job(interview.id)
+    else:
+        interview.rubric_template_id = template.id
+        db.commit()
+
+    return RubricTemplateAssignOut(interview_id=interview.id, rubric_template_id=template.id, job_id=job_id)
