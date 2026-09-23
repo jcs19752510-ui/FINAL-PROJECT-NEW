@@ -1,0 +1,64 @@
+# unit-25(원안 REQ-N-001 축소판, 전송 시 TLS 1.3 암호화) — 2026-09-22 사용자 승인.
+#
+# 이 프로젝트는 uvicorn을 TLS 종단으로 직접 쓰지 않는다(03-system-design.md §6.4가
+# 이미 "Nginx TLS 종단"을 전제로 설계됨 — `backend/app/core/config.py`의
+# `cookie_secure` 설정 주석 참고). 이 파일은 실제 배포 환경에 그대로 적용 가능한
+# 참고 설정이며, 로컬 개발 서버(uvicorn 8010)를 이 샘플이 자동으로 대체하지는
+# 않는다 — nginx가 설치된 배포 호스트에서 인증서 경로만 채워 사용한다.
+#
+# 실제 배포 전 확인할 것:
+# 1. `ssl_certificate`/`ssl_certificate_key` 경로를 실제 인증서(예: Let's Encrypt)로 교체
+# 2. `server_name`을 실제 도메인으로 교체
+# 3. `proxy_pass` 포트가 실제 uvicorn/gunicorn 바인딩 포트와 일치하는지 확인
+
+server {
+    listen 80;
+    server_name _;
+    # 모든 평문 HTTP 요청을 HTTPS로 강제 리다이렉트(TLS 우회 경로 차단)
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name your-domain.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.example.com/privkey.pem;
+
+    # TLS 1.3만 허용(원안 "TLS 1.3" 스펙 그대로). 구형 클라이언트 호환이 필요하면
+    # TLSv1.2를 추가할 수 있으나, 그 경우 원안 스펙과의 "일치" 판정이 달라진다.
+    ssl_protocols TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    # HSTS: 브라우저가 이후 이 도메인에는 항상 HTTPS로만 접속하도록 강제
+    # (FastAPI 쪽 SecurityHeadersMiddleware가 보내는 것과 동일 헤더 — 둘 중 하나만
+    # 있어도 되지만, 리버스프록시 계층에서도 명시해 방어를 이중화한다).
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+    location /media/ {
+        proxy_pass http://127.0.0.1:8010;
+        proxy_set_header Host $host;
+    }
+
+    location /ws/ {
+        # WebSocket 업그레이드(app/api/v1/ws.py) — 프록시가 Upgrade 헤더를 그대로 전달해야 함
+        proxy_pass http://127.0.0.1:8010;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8010;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # 원안 §4.2 API 게이트웨이 역할(로드밸런싱/SSL종단/라우팅) 중 SSL종단만
+        # 이 샘플이 담당한다 — 로드밸런싱/다중 업스트림 라우팅은 실제 인스턴스
+        # 수가 늘어날 때(③ 매트릭스 "K8s/클라우드 배포" 항목) 확장 필요.
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

@@ -22,8 +22,15 @@ from app.core.errors import AppError
 from app.db.session import get_db
 from app.models.consent import Consent
 from app.models.deletion_request import DeletionRequest, DeletionRequestStatus, DeletionTarget
+from app.models.interview import Interview
 from app.models.user import User
-from app.schemas.consent import ConsentCreate, ConsentOut, DeletionRequestOut
+from app.schemas.consent import (
+    ConsentCreate,
+    ConsentOut,
+    DataExportOut,
+    DeletionRequestOut,
+    InterviewSummaryExport,
+)
 
 router = APIRouter(tags=["consents"])
 
@@ -128,3 +135,46 @@ def list_my_deletion_requests(
         .order_by(DeletionRequest.requested_at.desc())
     )
     return list(db.scalars(stmt).all())
+
+
+@router.get("/users/me/data-export", response_model=DataExportOut, status_code=status.HTTP_200_OK)
+def export_my_data(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DataExportOut:
+    """unit-33(GDPR 제20조/CCPA 열람권 기술 대응, 2026-09-22 사용자 승인):
+    계정에 연결된 개인정보를 한 곳에서 조회 가능하게 한다. 대화 원문은
+    포함하지 않는다(`schemas/consent.py`의 `DataExportOut` docstring 참고).
+    """
+    consents = list(
+        db.scalars(select(Consent).where(Consent.user_id == current_user.id).order_by(Consent.granted_at.desc()))
+    )
+    deletion_requests = list(
+        db.scalars(
+            select(DeletionRequest)
+            .where(DeletionRequest.user_id == current_user.id)
+            .order_by(DeletionRequest.requested_at.desc())
+        )
+    )
+    interviews = list(
+        db.scalars(
+            select(Interview).where(Interview.candidate_id == current_user.id).order_by(Interview.created_at.desc())
+        )
+    )
+
+    return DataExportOut(
+        exported_at=datetime.now(UTC),
+        user_id=current_user.id,
+        email=current_user.email,
+        name=current_user.name,
+        account_created_at=current_user.created_at,
+        consents=[ConsentOut.model_validate(c) for c in consents],
+        deletion_requests=[DeletionRequestOut.model_validate(d) for d in deletion_requests],
+        interviews=[
+            InterviewSummaryExport(
+                interview_id=iv.id, status=iv.status.value, started_at=iv.started_at,
+                ended_at=iv.ended_at, overall_score=iv.overall_score,
+            )
+            for iv in interviews
+        ],
+    )

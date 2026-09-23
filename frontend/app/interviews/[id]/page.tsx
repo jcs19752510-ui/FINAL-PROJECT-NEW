@@ -42,6 +42,7 @@ import {
   listTranscripts,
   readAccessToken,
   submitTextTurn,
+  submitVoicePreview,
   submitVoiceTurn,
 } from "@/lib/api";
 import { useMediaQuery } from "@/lib/useMediaQuery";
@@ -54,6 +55,11 @@ import InterviewSidePanel, { SIDE_PANEL_LABEL, type SidePanelId } from "./compon
 // 녹음을 종료해 무제한 업로드를 방지한다(backend MAX_VOICE_UPLOAD_BYTES와 동일한
 // 목적의 프런트 측 안전장치).
 const MAX_RECORDING_MS = 120_000;
+
+// unit-36(STT 실시간 스트리밍 미리보기): 미리보기 세그먼트 길이(ms). 서버측 레이트
+// 리밋(prompt_safety.py `_PREVIEW_RATE_LIMIT_MAX_REQUESTS`=분당 20회)과 맞춰
+// 4초 간격이면 분당 최대 15회라 여유 있게 상한 아래.
+const PREVIEW_SEGMENT_MS = 4_000;
 
 // 03-design §4.3 서버→클라이언트 이벤트 스키마 그대로.
 type WsEvent =
@@ -119,6 +125,13 @@ export default function InterviewRoomPage() {
   const [voiceUploading, setVoiceUploading] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
 
+  // unit-36(STT 실시간 스트리밍 미리보기, 2026-09-23 사용자 승인): 녹음 "도중"
+  // 4초마다 별도 미니 세그먼트를 보내 인식 텍스트를 미리 보여준다. 최종 제출
+  // (recorder/handleVoiceUpload)과 완전히 분리된 두 번째 MediaRecorder를 같은
+  // 스트림에서 병행 실행한다 — 최종 제출 경로(오늘 실제 장애가 있었던 코드)는
+  // 건드리지 않는다.
+  const [livePreviewText, setLivePreviewText] = useState("");
+
   // 보조 패널(unit-20): activePanel=현재 노출 패널(null=채팅만), mountedPanels=한 번이라도
   // 열린 패널(닫아도 unmount하지 않아 로컬 편집 내용을 보존, InterviewSidePanel 참고).
   const isMobile = useMediaQuery(MOBILE_QUERY);
@@ -142,6 +155,8 @@ export default function InterviewRoomPage() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const maxRecordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewActiveRef = useRef(false);
+  const previewRecorderRef = useRef<MediaRecorder | null>(null);
 
   useEffect(() => {
     if (!accessToken) {
@@ -526,8 +541,64 @@ export default function InterviewRoomPage() {
 
   useEffect(() => () => {
     stopRecordingTimers();
+    stopPreviewLoop();
     releaseMicStream();
   }, []);
+
+  // unit-36: 최종 녹음(mediaRecorderRef)과 별개의 MediaRecorder를 같은 스트림에서
+  // PREVIEW_SEGMENT_MS 간격으로 재시작한다 — timeslice 청크는 첫 조각에만 WebM
+  // 헤더가 있어 이후 조각을 단독 디코딩할 수 없으므로(서버가 각 조각을 독립
+  // 파일로 디코딩해야 함), recorder 자체를 매번 새로 만들어 매 조각이 완전한
+  // 파일이 되게 한다. 실패해도 조용히 무시(부가 기능, 최종 제출에 영향 없음).
+  function stopPreviewLoop() {
+    previewActiveRef.current = false;
+    if (previewRecorderRef.current && previewRecorderRef.current.state !== "inactive") {
+      previewRecorderRef.current.stop();
+    }
+    previewRecorderRef.current = null;
+  }
+
+  function runPreviewCycle() {
+    if (!previewActiveRef.current || !mediaStreamRef.current) return;
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(mediaStreamRef.current);
+    } catch {
+      return;
+    }
+    const chunks: Blob[] = [];
+    previewRecorderRef.current = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+      const wasActive = previewActiveRef.current;
+      void (async () => {
+        if (wasActive && accessToken && blob.size > 0) {
+          try {
+            const result = await submitVoicePreview(accessToken, interviewId, blob);
+            if (result.text && previewActiveRef.current) {
+              setLivePreviewText((prev) => (prev ? `${prev} ${result.text}` : result.text));
+            }
+          } catch {
+            // 미리보기 실패는 조용히 무시 — 다음 세그먼트에서 다시 시도.
+          }
+        }
+        if (previewActiveRef.current) runPreviewCycle();
+      })();
+    };
+    recorder.start();
+    setTimeout(() => {
+      if (recorder.state !== "inactive") recorder.stop();
+    }, PREVIEW_SEGMENT_MS);
+  }
+
+  function startPreviewLoop() {
+    previewActiveRef.current = true;
+    setLivePreviewText("");
+    runPreviewCycle();
+  }
 
   async function startRecording() {
     setVoiceError(null);
@@ -541,7 +612,9 @@ export default function InterviewRoomPage() {
       };
       recorder.onstop = () => {
         stopRecordingTimers();
+        stopPreviewLoop();
         releaseMicStream();
+        setLivePreviewText("");
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         audioChunksRef.current = [];
         void handleVoiceUpload(blob);
@@ -555,6 +628,7 @@ export default function InterviewRoomPage() {
         // [C-06] 04-ux-design 명시값 아님 — 무제한 업로드 방지용 클라이언트 안전장치.
         mediaRecorderRef.current?.stop();
       }, MAX_RECORDING_MS);
+      startPreviewLoop();
     } catch {
       // 04-ux-design [C-06] "마이크 권한 없음": 음성 버튼 비활성 + 텍스트 입력만 강조.
       setVoiceError("마이크 권한이 거부되었거나 사용할 수 없습니다. 텍스트로 답변해주세요.");
@@ -746,6 +820,13 @@ export default function InterviewRoomPage() {
                 <div className="chat-bubble__text">{m.content_text}</div>
               </div>
             ))}
+
+            {recording && (
+              <div className="chat-bubble chat-bubble--user chat-bubble--processing">
+                <div className="chat-bubble__meta">나 · 음성 · 실시간 인식 중</div>
+                <div className="chat-bubble__text">{livePreviewText || "듣고 있어요..."}</div>
+              </div>
+            )}
 
             {voiceUploading && (
               <div className="chat-bubble chat-bubble--user chat-bubble--processing">

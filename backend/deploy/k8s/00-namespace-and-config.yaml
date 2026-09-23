@@ -1,0 +1,23 @@
+# unit-30(원안 §2.1/§7.1, K8s/클라우드 배포, 2026-09-22 사용자 승인) — 읽기 전용
+# 참고 매니페스트. **실제 클러스터에 적용/검증하지 않았다**(이 세션에 클라우드
+# 계정·K8s 클러스터가 없음) — `kubectl apply` 전 반드시 실제 인프라팀 검토 필요.
+# 문법은 `yaml.safe_load()`로 파싱 가능함만 확인했다(unit-30-test.md 참고).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mock-interview
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: mock-interview
+data:
+  # 시크릿이 아닌 값만 — DATABASE_URL/JWT_SECRET_KEY/REDIS_URL/FIELD_ENCRYPTION_KEY는
+  # backend-secrets(01-secrets.yaml.example)로 분리한다(게이트2 "시크릿 하드코딩 금지"
+  # 원칙, backend/app/core/config.py 상단 docstring과 동일 원칙을 인프라 계층에도 적용).
+  JWT_ALGORITHM: "HS256"
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+  JWT_REFRESH_TOKEN_EXPIRE_DAYS: "7"
+  CORS_ORIGINS: "https://your-domain.example.com"
+  COOKIE_SECURE: "true"
