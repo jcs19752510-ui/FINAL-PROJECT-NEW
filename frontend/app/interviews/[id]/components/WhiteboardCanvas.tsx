@@ -1,9 +1,10 @@
 "use client";
 
 // REQ-017 (Feature H, unit-17, 04-ux-design.md [C-08] 화이트보드 캔버스 패널).
-// DEC-008: AI가 화이트보드를 시각적으로 분석하는 기능은 Out-of-Scope(REQ-021)다.
-// 이 컴포넌트는 순수 드로잉 캔버스 + 스트로크 좌표 데이터의 저장/조회만 다루고,
-// 이미지 인식/비전 분석 코드는 포함하지 않는다.
+// DEC-008이 "AI 비전 분석은 Out-of-Scope(REQ-021)"라고 정했던 것을 2026-09-23
+// 사용자 승인으로 unit-35가 뒤집어, 아래 "AI 분석" 버튼으로 로컬 SmolVLM(무료)
+// 분석을 호출한다. 이 모델은 실측상 정확도가 낮아(whiteboard_vision.py 참고)
+// 결과에 항상 disclaimer를 함께 보여준다 — 생략 금지.
 //
 // 오케스트레이터 지시 범위: "마우스/터치로 그리기, 지우기, 저장 버튼"만 구현한다.
 // 04-ux-design.md [C-08]의 도구바 전체 항목(펜/도형/텍스트/지우기/색상) 중
@@ -17,7 +18,7 @@
 // 이번 유닛 범위 밖이다.
 
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { getWhiteboard, saveWhiteboard, type WhiteboardStroke } from "@/lib/api";
+import { analyzeWhiteboard, getWhiteboard, saveWhiteboard, type WhiteboardStroke } from "@/lib/api";
 
 export type WhiteboardCanvasStatus = "loading" | "ready" | "saving" | "saved" | "error";
 
@@ -54,6 +55,9 @@ export default function WhiteboardCanvas({
     interviewId && accessToken ? "loading" : "ready",
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysis, setAnalysis] = useState<{ text: string; disclaimer: string } | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   function redraw() {
     const canvas = canvasRef.current;
@@ -172,6 +176,21 @@ export default function WhiteboardCanvas({
     }
   }
 
+  async function handleAnalyze() {
+    if (!interviewId || !accessToken) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      const result = await analyzeWhiteboard(accessToken, interviewId);
+      setAnalysis({ text: result.analysis, disclaimer: result.disclaimer });
+    } catch {
+      setAnalysisError("분석에 실패했습니다. 먼저 저장했는지 확인해 주세요.");
+      setAnalysis(null);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
   const canSave = Boolean(interviewId && accessToken);
 
   return (
@@ -213,6 +232,14 @@ export default function WhiteboardCanvas({
         >
           {status === "saving" ? "저장 중..." : "저장"}
         </button>
+        <button
+          type="button"
+          onClick={() => void handleAnalyze()}
+          disabled={!canSave || analyzing}
+          style={buttonStyle}
+        >
+          {analyzing ? "AI 분석 중..." : "AI 분석"}
+        </button>
         <span aria-live="polite" style={statusTextStyle}>
           {status === "saved" && "저장됨"}
           {status === "error" && (errorMessage ?? "오류가 발생했습니다.")}
@@ -241,6 +268,18 @@ export default function WhiteboardCanvas({
           </div>
         )}
       </div>
+
+      {analysisError && (
+        <p role="alert" style={{ ...analysisTextStyle, color: "var(--color-danger, #c0362c)" }}>
+          {analysisError}
+        </p>
+      )}
+      {analysis && (
+        <div style={analysisBoxStyle} aria-live="polite">
+          <p style={{ ...analysisTextStyle, margin: 0 }}>{analysis.text}</p>
+          <p style={disclaimerStyle}>{analysis.disclaimer}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -297,6 +336,28 @@ const canvasStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "#ffffff",
   display: "block",
+};
+
+const analysisBoxStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  padding: "10px 12px",
+  borderRadius: 8,
+  border: "1px solid var(--color-border)",
+  background: "var(--color-surface)",
+};
+
+const analysisTextStyle: CSSProperties = {
+  fontSize: 13,
+  color: "var(--color-text-primary)",
+};
+
+const disclaimerStyle: CSSProperties = {
+  fontSize: 11,
+  margin: 0,
+  color: "var(--color-warning, #b45309)",
+  fontWeight: 600,
 };
 
 const overlayStyle: CSSProperties = {

@@ -1,9 +1,10 @@
 """REQ-017 (Feature H, unit-17): 화이트보드 캔버스 스냅샷 저장/조회
 (03-system-design.md v2 §3, §4.2, 04-ux-design.md v2 [C-08]).
 
-DEC-008: AI가 화이트보드를 시각적으로 분석하는 기능은 Out-of-Scope(REQ-021) —
-이 라우터는 순수 드로잉 데이터(스트로크 좌표 배열 JSON)의 저장/조회만 다루고,
-이미지 인식/비전 모델 호출 코드는 포함하지 않는다.
+DEC-008: AI가 화이트보드를 시각적으로 분석하는 기능은 원래 Out-of-Scope(REQ-021)
+였으나, 2026-09-23 사용자 승인으로 unit-35가 이를 뒤집어 `POST
+.../whiteboard/analyze`를 추가했다(로컬 SmolVLM, 무료 — 유료 GPT-4V는 계속
+미사용). 저장/조회(PUT/GET) 두 엔드포인트는 여전히 순수 드로잉 데이터만 다룬다.
 
 `interviews.py`(면접 세션 상태머신, unit-2/3/4 소유)는 건드리지 않는다 — 소유권
 검증(`_get_own_interview`와 동일한 로직)을 이 파일 안에 그대로 재구현해 다른
@@ -22,7 +23,14 @@ from app.db.session import get_db
 from app.models.interview import Interview
 from app.models.user import User
 from app.models.whiteboard import WhiteboardSnapshot
-from app.schemas.whiteboard import WhiteboardSaveRequest, WhiteboardSnapshotOut
+from app.schemas.whiteboard import WhiteboardAnalysisOut, WhiteboardSaveRequest, WhiteboardSnapshotOut
+from app.services.whiteboard_vision import (
+    LOW_CONFIDENCE_DISCLAIMER,
+    VisionAnalysisError,
+    WhiteboardRenderError,
+    analyze_diagram_local,
+    render_strokes_to_png,
+)
 
 router = APIRouter(prefix="/interviews", tags=["whiteboard"])
 
@@ -98,3 +106,41 @@ def get_whiteboard(
     if snapshot is None:
         return None
     return _to_out(snapshot)
+
+
+@router.post(
+    "/{interview_id}/whiteboard/analyze", response_model=WhiteboardAnalysisOut, status_code=status.HTTP_200_OK
+)
+def analyze_whiteboard(
+    interview_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WhiteboardAnalysisOut:
+    """unit-35(REQ-021 부분 재도입, 2026-09-23 사용자 승인): 최신 저장 스냅샷을
+    PNG로 렌더링한 뒤 로컬 SmolVLM(무료)에 보내 설명을 받는다.
+
+    저장된 스냅샷이 없으면 404(빈 캔버스는 "저장 안 됨"과 구분되는 별개 상태 —
+    GET과 달리 분석할 대상 자체가 없으므로 여기서는 null이 아니라 에러가 맞다).
+    렌더링/모델 호출 실패는 04-design §5.4 관례대로 504(AI_SERVICE_TIMEOUT)로
+    매핑한다(stt_engine.py 등과 동일 원칙).
+    """
+    interview = _get_own_interview(interview_id, current_user, db)
+
+    stmt = (
+        select(WhiteboardSnapshot)
+        .where(WhiteboardSnapshot.interview_id == interview.id)
+        .order_by(WhiteboardSnapshot.created_at.desc())
+        .limit(1)
+    )
+    snapshot = db.scalar(stmt)
+    if snapshot is None:
+        raise AppError(404, "NOT_FOUND", "Not Found", "분석할 화이트보드 캔버스가 아직 저장되지 않았습니다.")
+
+    strokes = snapshot.canvas_json.get("strokes", []) if isinstance(snapshot.canvas_json, dict) else []
+    try:
+        png_bytes = render_strokes_to_png(strokes)
+        analysis = analyze_diagram_local(png_bytes)
+    except (WhiteboardRenderError, VisionAnalysisError) as exc:
+        raise AppError(504, "AI_SERVICE_TIMEOUT", "AI Service Timeout", "화이트보드 분석에 실패했습니다.") from exc
+
+    return WhiteboardAnalysisOut(analysis=analysis, disclaimer=LOW_CONFIDENCE_DISCLAIMER)

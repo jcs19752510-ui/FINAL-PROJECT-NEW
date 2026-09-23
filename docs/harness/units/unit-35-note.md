@@ -71,3 +71,55 @@
    (예: `POST /interviews/{id}/whiteboard/analyze`, 09단계 이후 권장 — 임의
    코드실행(unit-29)과 달리 RCE 위험은 없으나 vendor 응답을 그대로 사용자에게
    노출하기 전 새니타이즈 필요 여부는 별도 검토).
+
+## 6. 후속 세션 — 로컬 VLM 실연결 (2026-09-23, DEC-061)
+
+사용자가 스펙 비교 문서(`spec-compare.html`)에서 "부분착수" 상태로 남아있던
+전환 가능성 매트릭스 항목 중 이 항목을 지정해 재개를 요청했다. 단, GPT-4V(유료)
+키를 새로 발급하지 않는다는 기존 방침(2026-09-23 초, "유료 항목은 진행 안 함")은
+그대로 유지되므로, §3에서 미배선 이유로 들었던 "비전 호출부가 키 없이 항상
+실패한다"는 전제 자체를 다른 경로로 해소했다 — **GPT-4V 대신 로컬 무료 VLM인
+SmolVLM-500M-Instruct**를 llama.cpp `llama-server`(llm_engine.py의 Qwen
+서브프로세스와 동일 패턴, 포트만 8093으로 분리)로 구동해 실제로 연결했다.
+
+- **신규 함수**: `whiteboard_vision.analyze_diagram_local(png_bytes)`. §3에서
+  거론했던 "독립 라우터로 분리" 방향을 그대로 따라 `whiteboard.py`(unit-17/20
+  소유 파일)에 새 엔드포인트 `POST /interviews/{id}/whiteboard/analyze`만
+  추가하고, 기존 PUT/GET 두 엔드포인트는 건드리지 않았다.
+- **실측 품질**: 직전 세션의 `.harness-tmp/test_smolvlm500_probe.py` 프로브
+  결과(한 단어/단편 답변)가 이번 실제 연결에서도 그대로 재현됐다 — 박스 2개 +
+  화살표 1개로 이루어진 테스트 다이어그램에 "이 이미지의 박스와 라벨을
+  설명하라"고 묻자 모델은 `"2"` 한 글자만 반환했다(§ unit-35-test.md TC-011
+  로그 참고). **품질 개선 시도는 하지 않고 그대로 연결**하기로 사용자가
+  명시적으로 결정했으므로(정확도 조건 없음), 모든 응답에 저신뢰
+  disclaimer(`LOW_CONFIDENCE_DISCLAIMER`)를 항상 동봉해 사용자가 결과를
+  맹신하지 않도록 하는 것으로 이 결정을 반영했다.
+- **지연시간 실측**: 서버 최초 기동 포함 31.0초(모델 로드+헬스체크 대기),
+  서버가 이미 떠 있는 상태에서 재호출 시 0.4초. Qwen(8091)과 별도 프로세스라
+  두 모델이 동시에 상주해도 포트 충돌은 없다(VRAM/RAM 여유는 실측하지 않음 —
+  이 환경은 내장 GPU라 Qwen도 CPU 폴백 상태였을 가능성이 높음, 후속 확인 필요).
+- **검증 수준**: 서비스 계층(`render_strokes_to_png`→`analyze_diagram_local`
+  직접 호출)은 실제 SmolVLM 서버에 대해 2회 실행(cold/warm)으로 검증했다.
+  FastAPI 앱 구성 시 신규 라우트가 정상 등록됨을 `app.routes` 조회로 확인했고,
+  프론트엔드(`WhiteboardCanvas.tsx`, `lib/api.ts`)는 `tsc --noEmit` 통과로
+  검증했다. **후속(같은 날, 사용자 요청): Docker Desktop을 실제로 기동**하고
+  (최초 구동이라 약 4분 소요), 기존 `final-project-db`/`final-project-redis`
+  컨테이너 재기동 + uvicorn 실행 + httpx로 회원가입→로그인→면접생성→화이트보드
+  저장→`POST .../whiteboard/analyze` 전 구간을 실제 HTTP로 검증 완료(unit-35
+  -test.md TC-015, 200 OK, 응답 `{"analysis":"2","disclaimer":"...","model":
+  "SmolVLM-500M-Instruct (local)"}`). 테스트로 생성한 계정 2건·면접 2건·
+  스냅샷 2건은 검증 직후 삭제(규칙 K). 이로써 §7의 후속 확인 4번 항목은 해소됐다.
+- unit-32 계열과 달리 이 항목은 **엔드포인트까지 실제로 배선했다** — 화이트보드
+  캔버스 UI(`WhiteboardCanvas.tsx`)에 "AI 분석" 버튼과 disclaimer 표시 영역도
+  함께 추가했다(면접장 메인 레이아웃에는 여전히 삽입되지 않은 독립 컴포넌트
+  상태, unit-17 원 노트와 동일 제약).
+
+## 7. 후속 확인 필요 항목(§6 추가분)
+
+4. ~~Docker/DB 스택을 띄울 수 있는 환경에서 `POST
+   /interviews/{id}/whiteboard/analyze`의 실제 HTTP 왕복(인증 포함) 재검증.~~
+   → **해소됨(같은 날, unit-35-test.md TC-015)**.
+5. Qwen(8091)과 SmolVLM(8093) 서버가 동시에 상주할 때의 실제 메모리 사용량 실측
+   (현재는 이론상 포트 분리로 공존 가능하다는 것만 확인, 동시 부하는 미검증).
+6. TC-015는 정상 경로만 확인 — 09단계(보안검증)에서 인증 우회, 타 사용자
+   interview_id 접근 시도 등 침투테스트 수준 재검증 필요.
