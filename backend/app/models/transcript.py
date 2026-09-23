@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -57,4 +57,9 @@ class Transcript(Base):
     input_mode: Mapped[InputMode] = mapped_column(Enum(InputMode, name="transcript_input_mode"), nullable=False)
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
     audio_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # unit-24(원안 REQ-018/019 축소판, 음성 Prosody 분석, 2026-09-22 사용자 승인).
+    # `app/services/prosody_engine.analyze_prosody()`의 원시 수치 반환값 그대로 저장.
+    # speaker=user·input_mode=voice인 행에서만 채워지고, 그 외에는 항상 null(분석
+    # 실패 시에도 null — 그레이스풀 디그레이드, 턴 저장 자체를 막지 않음).
+    prosody_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

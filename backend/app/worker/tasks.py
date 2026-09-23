@@ -46,6 +46,7 @@ from app.services.llm_engine import (
     generate_report_response,
     generate_turn_response,
 )
+from app.services.prompt_safety import log_persona_leak_detected
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
 from app.services.ws_publisher import publish_ws_event
@@ -144,22 +145,30 @@ def _bank_fallback_output(rag_candidates: list[Question]) -> TurnLLMOutput:
 
 
 def _generate_validated_followup(
-    system_prompt: str, user_message: str, rag_candidates: list[Question]
+    interview_id: uuid.UUID, system_prompt: str, user_message: str, rag_candidates: list[Question]
 ) -> TurnLLMOutput:
     """DEF-003/004/DEC-035 Q1: 검증(질문형·플레이스홀더 없음·한국어 비율·시스템
     프롬프트 문구 미포함) → 실패 시 1회 재시도 → 그래도 실패하면 질문은행 폴백.
 
     `generate_turn_response()` 자체의 스키마 파싱 재시도(최대 1회)와는 별개의
     상위 레이어 재시도다 — 스키마는 유효하지만 "품질"이 기준 미달인 경우를 잡는다.
+
+    unit-27(REQ-039 감사 로그, 2026-09-22 사용자 승인): 품질 가드 실패 사유 중
+    "시스템 프롬프트 유출 마커 포함"에 해당하는 경우만 골라 감사 로그를 남긴다
+    (다른 사유— 질문형 아님/플레이스홀더/한국어비율 — 는 REQ-039 범위가 아님).
     """
     output = generate_turn_response(system_prompt, user_message)
     if interview_prompts.validate_followup_speak_text(output.speak_text):
         return output
+    if interview_prompts.contains_persona_leak_marker(output.speak_text):
+        log_persona_leak_detected(str(interview_id), output.speak_text)
 
     logger.warning("후속 질문 출력 품질 가드 실패(1차) — 재시도")
     output = generate_turn_response(system_prompt, user_message)
     if interview_prompts.validate_followup_speak_text(output.speak_text):
         return output
+    if interview_prompts.contains_persona_leak_marker(output.speak_text):
+        log_persona_leak_detected(str(interview_id), output.speak_text)
 
     logger.warning("후속 질문 출력 품질 가드 실패(재시도 후) — 질문은행 폴백")
     return _bank_fallback_output(rag_candidates)
@@ -274,7 +283,7 @@ def process_turn_job(self, interview_id: str, transcript_id: str) -> None:
 
         try:
             system_prompt = interview_prompts.build_followup_system_prompt(rag_candidates)
-            output = _generate_validated_followup(system_prompt, user_message, rag_candidates)
+            output = _generate_validated_followup(interview_uuid, system_prompt, user_message, rag_candidates)
         except LlmGenerationError:
             logger.warning("turn LLM 생성 실패 — 안전 기본값 폴백", exc_info=True)
             output = TurnLLMOutput(speak_text=_TURN_FALLBACK_TEXT, control="next_question")
