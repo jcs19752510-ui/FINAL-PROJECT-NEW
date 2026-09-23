@@ -46,3 +46,25 @@
 
 ## 10. 내부 검증
 - N/A — 문법 검토 1개 케이스뿐이라 반복 검증의 실익 없음.
+
+---
+
+## 후속 실측 — Deepgram (2026-09-23, DEC-057)
+
+사용자가 Deepgram API 키를 발급·제공(`backend/.env`에 직접 저장, 키 값은 대화에 한 번만 노출된 뒤 파일로만 취급). ElevenLabs/OpenAI는 아직 미제공 — 이 절은 **Deepgram 하나만** 다룬다.
+
+### 테스트 케이스
+| ID | 시나리오 | 실행 절차 | 예상 결과 | 실제 결과 | Pass/Fail |
+|----|----------|-----------|-----------|-----------|-----------|
+| TC-002 | 실제 Deepgram API 호출(한국어 STT) | Piper로 "안녕하세요 저는 실시간 음성 인식 테스트를 진행하고 있습니다." 합성 → `transcribe_audio_deepgram(wav_bytes, api_key)` 실제 호출(`.harness-tmp/verify_deepgram.py`) | 원문과 일치하는 한국어 텍스트 반환 | `"안녕하세요 저는 실시간 음성 인식 테스트를 진행하고 있습니다."` — 정확히 일치 | Pass |
+| TC-003 | 응답 스키마 실측 확인 | 위 호출 응답에서 `results.channels[0].alternatives[0].transcript` 경로 실제 파싱 성공 여부 | 어댑터 docstring의 "실측 미확인" 가정이 맞는지 확인 | 정확히 그 경로로 파싱 성공 — 가정이 맞았음, `KeyError` 없음 | Pass |
+
+### 결함
+- 없음. 다만 어댑터의 `Content-Type: "audio/wav"` 고정값(코드 주석에 "실제 연결 시 업로드 파일의 실제 MIME 타입으로 교체 필요"로 표시됨)은 이번 테스트가 실제로 WAV를 보냈기 때문에 우연히 맞았다 — `interviews.py`가 받는 브라우저 업로드(webm 등)를 그대로 넘기면 이 고정값이 깨질 수 있다. **실제 엔드포인트 연결 시 반드시 고쳐야 함**(unit-32-note.md §4 체크리스트에 이미 있던 항목, 이번 실측으로 근거 보강).
+
+### 정리(규칙 K)
+- 생성 파일: `.harness-tmp/verify_deepgram.py`(스크립트 자체), 임시 WAV는 메모리에서만 생성되어 디스크에 남지 않음(Piper 어댑터가 아니라 `PiperTTSEngine.synthesize()`를 직접 호출해 bytes만 받음). 정리 대상 없음.
+
+### 판정 갱신
+- Deepgram: **CONDITIONAL PASS → 기능 검증 PASS로 승격**(단, 여전히 어떤 API 엔드포인트에도 배선되지 않은 상태 — 운영 경로는 DEC-005 그대로 로컬 faster-whisper). ElevenLabs/Pinecone은 키 미제공으로 그대로 CONDITIONAL PASS(9절 원문 유지).
+- 내부 검증: Tier Low이고 1차(위 TC-002/003) 결함 0건이므로 2차 생략 가능(규칙 B Low 예외) — 생략함.

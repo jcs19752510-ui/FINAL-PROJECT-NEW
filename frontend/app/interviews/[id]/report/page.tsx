@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ApiError, type ReportOut, getReport, readAccessToken, regenerateReport } from "@/lib/api";
+import RubricEvidenceSection from "@/components/RubricEvidenceSection";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -239,6 +240,8 @@ export default function InterviewReportPage() {
             <ScoreRow label="조직 적합도" score={report.cultural_fit_score} />
           </section>
         )}
+
+        <RubricEvidenceSection rubric={report.rubric} />
 
         {report.star ? (
           <section style={{ marginBottom: 20 }}>
