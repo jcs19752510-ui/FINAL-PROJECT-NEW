@@ -11,6 +11,7 @@ from app.api.v1.consents import router as consents_router
 from app.api.v1.interviews import router as interviews_router
 from app.api.v1.ops import router as ops_router
 from app.api.v1.recruiter import router as recruiter_router
+from app.api.v1.webcam_emotion import router as webcam_emotion_router
 from app.api.v1.webrtc_signaling import router as webrtc_signaling_router
 from app.api.v1.whiteboard import router as whiteboard_router
 from app.api.v1.ws import redis_relay_loop
@@ -104,6 +105,7 @@ app.include_router(consents_router, prefix="/api/v1")
 app.include_router(interviews_router, prefix="/api/v1")
 app.include_router(ops_router, prefix="/api/v1")
 app.include_router(recruiter_router, prefix="/api/v1")
+app.include_router(webcam_emotion_router, prefix="/api/v1")
 app.include_router(whiteboard_router, prefix="/api/v1")
 # 03-system-design.md §4.3: WebSocket 경로는 `/api/v1` 프리픽스 없이 `/ws/interviews/{id}`.
 app.include_router(ws_router)

@@ -40,6 +40,16 @@ logger = logging.getLogger(__name__)
 # 동일한 DeepFace 기본 7종 그대로.
 _EMOTION_LABELS = ("angry", "disgust", "fear", "happy", "sad", "surprise", "neutral")
 
+# 2026-09-24(unit-31 후속, 사용자 승인 — "법무 자문 없이 개인 PC 임시 테스트 전용"으로
+# 범위를 명시적으로 좁힘): 실제 채용 프로세스(면접 리포트/평가 파이프라인)에는 여전히
+# 연결하지 않는다 — 이 disclaimer로 그 경계를 항상 명시한다. 얼굴 이미지는 API 응답에만
+# 쓰이고 DB에 저장되지 않는다(이 모듈 자체가 상태를 갖지 않음).
+LOCAL_TEST_ONLY_DISCLAIMER = (
+    "⚠ 개인 PC 임시 기술 테스트 전용 — 실제 채용 프로세스(면접 평가·리포트)에는 연결되지 않았습니다. "
+    "얼굴 이미지는 감정 분석에만 사용되고 저장되지 않습니다. 실제 지원자 데이터에 연결하려면 "
+    "법무 검토(생체정보 동의 절차·EU AI Act 감정인식 규제 검토)가 반드시 선행되어야 합니다."
+)
+
 
 class EmotionAnalysisError(Exception):
     """디코딩 실패, 얼굴 미검출 등을 단일 계약으로 승격한다."""

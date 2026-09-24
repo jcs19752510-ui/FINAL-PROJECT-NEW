@@ -27,3 +27,12 @@ langchain-openai>=0.2,<0.3
 # 사용(app/services/whiteboard_vision.py). unit-35 착수 시점에 backend/.venv에는 이미 설치돼
 # 있었으나 이 파일에 선언이 누락돼 있던 결함을 함께 수정(신규 환경에서 재현 불가했을 것).
 Pillow>=11.0,<13.0
+# unit-31(원안 REQ-018, 표정 기반 감정분석, app/services/emotion_engine.py) 후속 —
+# 2026-09-24(unit-31 재후속, DEC-070): "개인 PC 임시 테스트 전용"으로 사용자가 범위를
+# 명시 승인해 실제로 API 배선. unit-31 최초 검증 당시(2026-09-22)는 의도적으로 이 파일에
+# 선언하지 않았음(미배선 상태 유지 원칙) — 이번에 배선하며 선언도 함께 추가한다.
+# 버전은 unit-31-test.md가 실측 검증한 조합 그대로 고정(다른 버전 조합은 검증되지 않음).
+deepface==0.0.101
+tensorflow==2.21.0
+tf-keras==2.21.0
+opencv-python==5.0.0.93
