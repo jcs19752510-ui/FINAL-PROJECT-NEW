@@ -52,3 +52,26 @@ class CodeSubmissionOut(BaseModel):
     submitted_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class CodeExecutionCreate(BaseModel):
+    """POST /interviews/{id}/code-submissions/execute 요청 바디 (unit-29 후속,
+    2026-09-24 사용자 승인). `ALLOWED_LANGUAGES`(11개, 저장용)보다 훨씬 좁은
+    `code_sandbox.py`의 실행 지원 언어(python/javascript 2종)만 허용 — 나머지는
+    저장은 되지만 "실행"은 422로 거부된다.
+    """
+
+    language: str = Field(min_length=1, max_length=32)
+    content: str = Field(min_length=1, max_length=20000)
+
+    @field_validator("language")
+    @classmethod
+    def _validate_language(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class CodeExecutionOut(BaseModel):
+    stdout: str
+    stderr: str
+    exit_code: int | None
+    timed_out: bool

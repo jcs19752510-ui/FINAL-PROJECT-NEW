@@ -1,9 +1,11 @@
-"""REQ-008 (Feature D, unit-9): 라이브 코딩 환경 — 코드 제출/저장(실행 없음).
+"""REQ-008 (Feature D, unit-9): 라이브 코딩 환경 — 코드 제출/저장(+ unit-29 후속 실행).
 
 03-system-design.md §4.2 `/interviews/{id}/code-submissions`(POST 원 계획, GET은 v2
 DEC-024 갭3 신규) + §3.1 ERD `CODE_SUBMISSIONS` + 04-ux-design.md [C-07] 코드 에디터
-패널. DEC-008에 따라 코드 "실행" 기능은 범위 밖이며, 이 라우터는 순수 저장/조회만
-다룬다.
+패널. DEC-008이 코드 "실행" 기능을 Out-of-Scope로 확정했었으나, unit-29가 격리 코드를
+작성하고 사용자가 2026-09-24 실행 엔드포인트 배선을 명시 승인해 DEC-008을 이 파일
+안에서 부분적으로 뒤집는다 — 저장/조회(POST·GET, 실행 없음)와 실행(POST .../execute,
+`code_sandbox.py` 격리 호출)을 같은 라우터에 함께 둔다.
 
 `interviews.py`(면접 세션 상태머신, unit-2~4 소유)는 이번 유닛의 지시 범위 밖이라
 건드리지 않는다 — 소유권 검사(`_get_own_interview`류 로직)는 이 파일 안에 독립적으로
@@ -22,7 +24,14 @@ from app.db.session import get_db
 from app.models.code_submission import CodeSubmission
 from app.models.interview import Interview
 from app.models.user import User
-from app.schemas.code_submission import CodeSubmissionCreate, CodeSubmissionOut
+from app.schemas.code_submission import (
+    CodeExecutionCreate,
+    CodeExecutionOut,
+    CodeSubmissionCreate,
+    CodeSubmissionOut,
+)
+from app.services.code_sandbox import UnsupportedSandboxLanguage, execute_code_sandboxed
+from app.services.prompt_safety import RateLimitExceeded, check_and_increment_sandbox_rate_limit
 
 router = APIRouter(prefix="/interviews", tags=["code-submissions"])
 
@@ -93,3 +102,45 @@ def list_code_submissions(
     stmt = stmt.order_by(CodeSubmission.submitted_at.desc())
 
     return list(db.scalars(stmt).all())
+
+
+@router.post(
+    "/{interview_id}/code-submissions/execute",
+    response_model=CodeExecutionOut,
+    status_code=status.HTTP_200_OK,
+)
+def execute_code_submission(
+    interview_id: UUID,
+    payload: CodeExecutionCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CodeExecutionOut:
+    """(unit-29 후속, 2026-09-24 사용자 승인) 제출된 코드를 `code_sandbox.py`의
+    9중 격리 Docker 컨테이너 안에서 실제로 실행한다. 실행 결과는 DB에 저장하지
+    않는다(`code_submission.py`가 "이 모델은 실행과 관련된 어떤 필드도 갖지
+    않는다"고 명시한 원칙을 그대로 유지 — 저장은 기존 POST가, 실행은 이 엔드포인트가
+    각각 독립적으로 담당하며 서로의 데이터를 공유하지 않는다).
+
+    신뢰할 수 없는 제3자(면접 지원자) 코드를 실행하는 기능이라 (1) 소유권 검사
+    (2) 전용 분당 5회 레이트리밋(다른 두 한도보다 보수적) (3) 언어 화이트리스트
+    (저장 11종보다 훨씬 좁은 실행 지원 2종만) 순서로 방어한 뒤에만 실제 실행에
+    도달한다.
+    """
+    _get_own_interview(interview_id, current_user, db)
+
+    try:
+        check_and_increment_sandbox_rate_limit(str(current_user.id))
+    except RateLimitExceeded as exc:
+        raise AppError(429, "RATE_LIMIT_EXCEEDED", "Too Many Requests", str(exc)) from exc
+
+    try:
+        result = execute_code_sandboxed(payload.language, payload.content)
+    except UnsupportedSandboxLanguage as exc:
+        raise AppError(422, "VALIDATION_ERROR", "Validation Error", str(exc)) from exc
+
+    return CodeExecutionOut(
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.exit_code,
+        timed_out=result.timed_out,
+    )

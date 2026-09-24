@@ -4,8 +4,11 @@
  * [C-07] 코드 에디터 패널 (라이브 코딩, REQ-008, Feature D, unit-9).
  *
  * 04-ux-design.md [C-07] / 03-system-design.md §4.2("/interviews/{id}/code-submissions"
- * POST+GET) §3.1(CODE_SUBMISSIONS ERD) 명세를 그대로 구현한다. DEC-008에 따라 코드
- * "실행" 기능은 전혀 포함하지 않는다(제출/저장만).
+ * POST+GET) §3.1(CODE_SUBMISSIONS ERD) 명세를 그대로 구현한다. DEC-008은 원래 코드
+ * "실행" 기능을 Out-of-Scope로 뒀으나, unit-29(격리 샌드박스) + 2026-09-24 사용자
+ * 승인으로 `POST /interviews/{id}/code-submissions/execute`가 배선돼 "실행" 버튼을
+ * 추가한다 — 백엔드 지원 언어(python/javascript 2종)에서만 활성화되고, 나머지
+ * 언어는 여전히 저장만 가능하다(버튼 비활성 + 안내).
  *
  * **독립 컴포넌트 경계(오케스트레이터 지시)**: 이 파일은 unit-4가 소유한
  * `frontend/app/interviews/[id]/page.tsx`, `frontend/lib/api.ts`를 전혀 import하지
@@ -61,6 +64,17 @@ interface CodeSubmissionOut {
   submitted_at: string;
 }
 
+interface CodeExecutionOut {
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  timed_out: boolean;
+}
+
+// backend `app/services/code_sandbox.py`의 `_LANGUAGE_RUNTIMES` 지원 언어와
+// 반드시 동일하게 유지 — 나머지 9개 언어는 저장만 가능하고 실행 버튼은 비활성화된다.
+const EXECUTABLE_LANGUAGES: ReadonlySet<LanguageValue> = new Set(["python", "javascript"]);
+
 type SaveStatus = "saved" | "saving" | "unsaved" | "error";
 
 const SAVE_STATUS_LABEL: Record<SaveStatus, string> = {
@@ -92,6 +106,9 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [executing, setExecuting] = useState(false);
+  const [executionResult, setExecutionResult] = useState<CodeExecutionOut | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
   const lastSavedContentRef = useRef<string>("");
 
   // [C-07]: 언어를 바꿀 때마다 해당 언어의 최신 제출본을 불러와 에디터를 복원한다
@@ -134,6 +151,8 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
     }
 
     load();
+    setExecutionResult(null);
+    setExecutionError(null);
     return () => {
       cancelled = true;
     };
@@ -172,7 +191,34 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
     }
   }
 
+  async function handleExecute() {
+    if (!accessToken || executing) return;
+    setExecuting(true);
+    setExecutionError(null);
+    setExecutionResult(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/code-submissions/execute`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ language, content }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.detail ?? `실행 실패 (status ${res.status})`);
+      }
+      setExecutionResult(body as CodeExecutionOut);
+    } catch (err) {
+      setExecutionError(err instanceof Error ? err.message : "코드 실행 중 오류가 발생했습니다.");
+    } finally {
+      setExecuting(false);
+    }
+  }
+
   const showSkeleton = editorMounting || restoreLoading;
+  const canExecute = EXECUTABLE_LANGUAGES.has(language);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -229,15 +275,49 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
         />
       </div>
 
-      <footer>
-        <button
-          type="button"
-          className="submit-button"
-          onClick={handleSubmit}
-          disabled={saveStatus === "saving" || restoreLoading}
-        >
-          제출
-        </button>
+      <footer style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <button
+            type="button"
+            className="submit-button"
+            onClick={handleSubmit}
+            disabled={saveStatus === "saving" || restoreLoading}
+          >
+            제출
+          </button>
+          <button type="button" onClick={handleExecute} disabled={!canExecute || executing || restoreLoading}>
+            {executing ? "실행 중..." : "실행"}
+          </button>
+          {!canExecute && (
+            <span style={{ fontSize: "0.8rem", color: "#868e96" }}>
+              Python·JavaScript만 실행할 수 있습니다(나머지 언어는 저장만 가능).
+            </span>
+          )}
+        </div>
+
+        {executionError && <div className="banner-error">{executionError}</div>}
+
+        {executionResult && (
+          <div
+            style={{
+              background: "#1e1e1e",
+              color: "#d4d4d4",
+              borderRadius: "6px",
+              padding: "0.75rem 1rem",
+              fontFamily: "ui-monospace, monospace",
+              fontSize: "0.85rem",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            <div style={{ color: "#9cdcfe", marginBottom: "0.25rem" }}>
+              exit_code={executionResult.exit_code ?? "—"}
+              {executionResult.timed_out && " (시간 초과로 강제 종료됨)"}
+            </div>
+            {executionResult.stdout && <div>{executionResult.stdout}</div>}
+            {executionResult.stderr && <div style={{ color: "#f14c4c" }}>{executionResult.stderr}</div>}
+            {!executionResult.stdout && !executionResult.stderr && <div style={{ color: "#868e96" }}>(출력 없음)</div>}
+          </div>
+        )}
       </footer>
     </div>
   );

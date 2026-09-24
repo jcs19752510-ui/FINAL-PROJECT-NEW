@@ -68,3 +68,42 @@
 ### 판정 갱신
 - Deepgram: **CONDITIONAL PASS → 기능 검증 PASS로 승격**(단, 여전히 어떤 API 엔드포인트에도 배선되지 않은 상태 — 운영 경로는 DEC-005 그대로 로컬 faster-whisper). ElevenLabs/Pinecone은 키 미제공으로 그대로 CONDITIONAL PASS(9절 원문 유지).
 - 내부 검증: Tier Low이고 1차(위 TC-002/003) 결함 0건이므로 2차 생략 가능(규칙 B Low 예외) — 생략함.
+
+---
+
+## 후속 배선 — 실제 음성 제출 경로 연결 (2026-09-23, DEC-063)
+
+사용자가 "부분착수/코드준비 항목을 완료로 올릴 방법이 있는지" 질의 → 이 항목(Deepgram)은
+키 검증까지 끝난 상태라 **돈 없이 순수 개발로 완료 가능**하다고 판단해 사용자가 승인,
+실제 배선 작업을 진행했다.
+
+### 구현
+- `stt_adapter_deepgram.transcribe_audio_deepgram()`: `Content-Type` 하드코딩(`"audio/wav"`)을
+  제거하고 호출부가 실제 업로드 MIME 타입을 전달하는 `content_type` 인자로 교체 —
+  TC-003 결함 메모("webm 등 실제 업로드 시 깨질 수 있음")가 지적한 문제를 해소.
+- 신규 `app/services/stt_router.py::transcribe_audio_smart(audio_bytes, content_type)`:
+  `settings.deepgram_api_key`가 설정돼 있으면 Deepgram을 먼저 시도하고, 미설정이거나
+  호출 실패(네트워크 오류·크레딧 소진 등) 시 조용히 `stt_engine.transcribe_audio()`
+  (faster-whisper)로 폴백한다 — 운영 기본값은 여전히 무료 로컬 경로(DEC-005 유지),
+  키가 있을 때만 Deepgram이 우선 사용된다.
+- `app/api/v1/interviews.py`의 실제 음성 제출 경로 2곳(`_submit_voice_turn`의 최종 제출,
+  `unit-36` 미리보기 엔드포인트)에서 `transcribe_audio` 직접 호출을 `transcribe_audio_smart`로
+  교체하고 업로드 파일의 `audio.content_type`을 그대로 전달.
+
+### 테스트 케이스
+| ID | 시나리오 | 실행 절차 | 예상 결과 | 실제 결과 | Pass/Fail |
+|----|----------|-----------|-----------|-----------|-----------|
+| TC-004 | 직접 함수 호출 — 라우터가 Deepgram을 실제로 타는지 | Piper로 합성한 실제 한국어 WAV를 `transcribe_audio_smart(wav_bytes, "audio/wav")`에 전달 | Deepgram이 인식한 텍스트 반환(faster-whisper 모델은 로드되지 않아야 함) | `"안녕하세요 반갑습니다. 오늘 면접에 참여해 주셔서 감사합니다."` 반환. 로그에 "faster-whisper 모델 로딩 시작" 부재 확인 — Deepgram 경로가 실제로 사용됨 | Pass |
+| TC-005 | 실 HTTP E2E — 인증 포함 전 구간 | Docker(`final-project-db`/`final-project-redis`) 기동 상태에서 uvicorn(8010) 실행, httpx로 회원가입→로그인→`biometric_voice`+`ai_interview_notice` 동의→면접생성→`start`(live 전환)→`POST /interviews/{id}/turns`(multipart, `audio/wav`) | 202 Accepted, 저장된 transcript의 `content_text`가 Deepgram 인식 결과와 일치 | `202 {"job_id":"..."}`, `GET .../transcripts` 응답의 `content_text`가 TC-004와 정확히 동일한 문장. 서버 로그에 Deepgram 폴백 경고 없음(정상 경로로 성공했음을 재확인) | Pass |
+
+### 결함
+- 없음.
+
+### 정리(규칙 K)
+- 테스트로 생성한 계정 1건·동의 2건·면접 1건·transcript 1건은 검증 직후 스크립트로 즉시 삭제 완료.
+- 테스트용 uvicorn(포트 8010) 프로세스 종료 완료. `final-project-db`/`final-project-redis`는 프로젝트 표준 개발 인프라이므로 유지.
+- `.harness-tmp/`에 남긴 산출물 없음(스크립트는 세션 스크래치패드에서 실행).
+
+### 판정 갱신(최종)
+- Deepgram STT: **부분착수 → 완료**(③ 매트릭스 갱신 대상). 실제 서비스 경로(`POST /interviews/{id}/turns`, `.../turns/preview`)에 배선 완료, 인증 포함 실 HTTP 검증까지 마쳤다. 운영 기본값은 여전히 무료 faster-whisper이며, `DEEPGRAM_API_KEY`가 설정된 환경에서만 Deepgram이 우선 사용되는 그레이스풀 폴백 구조.
+- ElevenLabs/Pinecone은 키 미제공으로 여전히 CONDITIONAL PASS — 유료 키 구매 없이는 완료 불가(별도 DEC-063 본문 참고).

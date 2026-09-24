@@ -1,13 +1,15 @@
 """STT 벤더 어댑터 — Deepgram Nova-2 (원안 §5.2.1, 2026-09-22 사용자 승인, unit-32).
 
-**미검증 코드임을 명시**(`tts_adapter_elevenlabs.py`와 동일 원칙 — 이 파일
-docstring 반복 대신 그쪽을 참고). Deepgram API 키가 없어 실제 호출 검증 못함.
+2026-09-23 사용자 제공 키로 실제 호출 검증 완료(unit-32-test.md 후속 TC-002/003).
+2026-09-23(DEC-063, unit-32 재후속): `app/services/stt_router.py`를 통해 실제
+음성 제출 경로(`app/api/v1/interviews.py`)에 배선 완료 — 더 이상 미검증·미배선
+코드가 아니다.
 
 이번 구현은 **배치 호출**(전체 오디오를 한 번에 업로드, 원안의 스트리밍
 "<300ms" 목표는 미달성)만 구현했다 — `app/services/stt_engine.transcribe_audio()`
 와 동일한 함수 시그니처(오디오 바이트 → 텍스트)를 맞춰, 팩토리에서 교체만
 하면 되도록 설계했다. 진짜 스트리밍(청크 단위 실시간)은 WebSocket 기반 별도
-구현이 필요하며 ③ 매트릭스의 "STT 실시간 스트리밍 전환" 항목(보류 중)과
+구현이 필요하며 ③ 매트릭스의 "STT 실시간 스트리밍 전환" 항목(별도 unit-36)과
 얽혀 있다.
 """
 import json
@@ -24,21 +26,20 @@ _TIMEOUT_SECONDS = 10
 _QUERY_PARAMS = "?model=nova-2&language=ko&smart_format=true"
 
 
-def transcribe_audio_deepgram(audio_bytes: bytes, api_key: str) -> str:
-    """`stt_engine.transcribe_audio(audio_bytes)`와 동일한 시그니처(키 인자만
-    추가) — 팩토리 교체 시 이 함수로 바꾸기만 하면 호출부(`interviews.py`)는
-    수정할 필요가 최소화되도록 설계.
+def transcribe_audio_deepgram(audio_bytes: bytes, api_key: str, content_type: str = "audio/wav") -> str:
+    """`stt_engine.transcribe_audio(audio_bytes)`와 동일한 시그니처(키·content_type
+    인자만 추가) — `stt_router.transcribe_audio_smart()`가 이 함수를 호출한다.
+
+    `content_type`은 호출부(`interviews.py`)가 받은 멀티파트 업로드 파일의 실제
+    MIME 타입을 그대로 전달해야 한다(Deepgram은 Content-Type으로 오디오 포맷을
+    추론). 값이 없으면 기본값 `audio/wav`로 폴백한다.
     """
     request = urllib.request.Request(
         _API_URL + _QUERY_PARAMS,
         data=audio_bytes,
         headers={
             "Authorization": f"Token {api_key}",
-            # 업로드 포맷은 클라이언트가 보내는 실제 코덱에 맞춰야 한다(webm/wav 등) —
-            # Deepgram은 Content-Type으로 포맷을 추론하므로, 실제 연결 시
-            # `interviews.py`가 받는 멀티파트 파일의 content_type을 그대로 전달해야
-            # 한다(현재는 미검증 상태라 고정값을 쓰지 않고 이 자리에 표시만 해둠).
-            "Content-Type": "audio/wav",  # 실제 연결 시 업로드 파일의 실제 MIME 타입으로 교체 필요
+            "Content-Type": content_type or "audio/wav",
         },
         method="POST",
     )

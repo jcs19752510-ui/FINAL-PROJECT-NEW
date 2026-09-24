@@ -32,8 +32,10 @@ multipart)"라고 명시했으므로 별도 엔드포인트를 신설하지 않�
 따라 음성 제출일 때만 매 요청 실시간으로 `biometric_voice` 동의를 재검사하고,
 동의가 없거나 철회됐으면 `403 CONSENT_REQUIRED_VOICE`를 반환하며 오디오는 어떤
 형태로도 저장하지 않는다(`app/services/stt_engine.py`가 디스크에 파일을 쓰지 않고
-메모리에서만 처리). STT(`transcribe_audio`)는 실제로 동작하지만, AI 응답 생성
-(LLM 꼬리질문)은 여전히 unit-7 범위라 `enqueue_turn_job` 스텁을 그대로 재사용한다.
+메모리에서만 처리). STT(`stt_router.transcribe_audio_smart`, 2026-09-23 DEC-063
+배선 — `DEEPGRAM_API_KEY` 있으면 Deepgram 우선, 없거나 실패하면 faster-whisper로
+자동 폴백)는 실제로 동작하지만, AI 응답 생성(LLM 꼬리질문)은 여전히 unit-7 범위라
+`enqueue_turn_job` 스텁을 그대로 재사용한다.
 
 범위(unit-6, Feature C, REQ-006): `POST /interviews/{id}/tts-preview`(신규,
 설계서 §4.2 REST 표에는 없는 준비/검증 엔드포인트 — 아래 라우터 docstring 참고).
@@ -85,7 +87,8 @@ from app.services.prompt_safety import (
 )
 from app.services.prosody_engine import ProsodyAnalysisError, analyze_prosody
 from app.services.rubric_defaults import SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID
-from app.services.stt_engine import SttTranscriptionError, transcribe_audio
+from app.services.stt_engine import SttTranscriptionError
+from app.services.stt_router import transcribe_audio_smart
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
 
@@ -571,9 +574,10 @@ async def _submit_voice_turn(
     (1) `biometric_voice` 동의를 **매 요청마다 실시간으로 DB 재조회**해 검사한다
     (세션 컨텍스트 캐시 금지, §6.2). 동의가 없거나 철회됐으면 오디오를 조금도
     읽지 않고(멀티파트 파싱조차 시도하지 않고) 즉시 403을 반환한다.
-    (2) STT는 `app/services/stt_engine.py`(faster-whisper)로 실제 변환하며, 변환에
-    쓰인 오디오 바이트는 메모리에서만 존재하다가 함수 종료와 함께 버려진다(디스크
-    미기록, §6.2 최소수집).
+    (2) STT는 `app/services/stt_router.py`(2026-09-23 DEC-063: `DEEPGRAM_API_KEY`
+    설정 시 Deepgram 우선, 없거나 실패하면 faster-whisper로 자동 폴백)로 실제
+    변환하며, 변환에 쓰인 오디오 바이트는 메모리에서만 존재하다가 함수 종료와 함께
+    버려진다(디스크 미기록, §6.2 최소수집).
     (3) 변환된 텍스트만 `TRANSCRIPTS(input_mode=voice, audio_ref=null)`로 영구 저장한다.
     (4) AI 응답 생성(LLM)은 unit-7 범위라 텍스트 턴과 동일하게 `enqueue_turn_job`
     스텁으로 202 계약만 충족한다.
@@ -621,7 +625,7 @@ async def _submit_voice_turn(
         # 없이 부르면 그 몇 초 동안 프로세스 전체의 이벤트 루프가 멈춘다(다른 모든
         # 요청/WS가 응답 불능이 됨) — 음성 답변 제출이 실제 백엔드 행을 일으킨
         # 근본 원인 중 하나로 확인되어 명시적으로 스레드풀에 위임한다.
-        text = await run_in_threadpool(transcribe_audio, audio_bytes)
+        text = await run_in_threadpool(transcribe_audio_smart, audio_bytes, getattr(audio, "content_type", None))
     except SttTranscriptionError as exc:
         raise AppError(
             504,
@@ -784,7 +788,7 @@ async def submit_voice_preview(
         )
 
     try:
-        text = await run_in_threadpool(transcribe_audio, audio_bytes)
+        text = await run_in_threadpool(transcribe_audio_smart, audio_bytes, getattr(audio, "content_type", None))
     except SttTranscriptionError:
         # 미리보기는 부가 기능이라 STT가 실패해도 사용자 작업을 막지 않는다
         # (그레이스풀 디그레이드 — 다음 4초 조각에서 다시 시도됨).
