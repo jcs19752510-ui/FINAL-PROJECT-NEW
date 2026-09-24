@@ -72,3 +72,45 @@
 - 1차 검증 결과 요약: 작성자 관점. 결함 0건 — 사용자 터미널 원문을 §4에 그대로 인용했는지, 8개 TC가 모듈 docstring 9원칙과 1:1 대응하는지 확인.
 - 2차 검증 결과 요약: 처음 받는 심사자 관점. 결함 0건 — "미배선 유지"와 "보안 완화 거절"이 §1/§8/§9에 일관되게 기록됐는지, decisions.md DEC-060과 교차 확인.
 - 검증 로그 파일 경로: `docs/harness/verify-log_unit-29-test.md`
+
+---
+
+## 11. 후속 — API 엔드포인트 배선 및 실 HTTP/실 브라우저 검증 (2026-09-24, DEC-069)
+
+### 11.1 경위
+사용자가 "K8s 로컬 클러스터 검증"과 "코드샌드박스 API 배선" 둘 다 진행해달라고 명시 승인했다("모두 진행해 주세요, 최대한 완료를 모두 하고 싶어요"). §9 판정이 명시한 "API 미배선은 의도적 결정"의 전제조건("별도 사용자 승인")이 이번에 충족됐다 — DEC-060(보안 완화 거절)은 그대로 유지하고, 격리 수준은 손대지 않은 채 엔드포인트만 새로 추가한다.
+
+### 11.2 구현
+- `backend/app/services/prompt_safety.py`: `check_and_increment_sandbox_rate_limit()` 신규 — 사용자당 분당 5회(기존 LLM 턴 10회/STT 미리보기 20회보다 보수적, "신뢰 불가 코드 실행"이라는 위험도를 반영).
+- `backend/app/schemas/code_submission.py`: `CodeExecutionCreate`/`CodeExecutionOut` 신규.
+- `backend/app/api/v1/code_submissions.py`: `POST /interviews/{id}/code-submissions/execute` 신규 — 소유권 검사 → 레이트리밋 → `code_sandbox.execute_code_sandboxed()` 순서로 방어. 실행 결과는 DB에 저장하지 않음(`code_submission.py`의 "이 모델은 실행 필드를 갖지 않는다" 원칙 유지 — 저장과 실행을 완전히 분리).
+- `frontend/.../CodeEditorPanel.tsx`: "실행" 버튼 신규(Python/JavaScript만 활성화, 나머지 9개 언어는 안내 문구와 함께 비활성). 결과(stdout/stderr/exit_code/timed_out)를 터미널 스타일 박스로 표시. 이 컴포넌트는 이미 `InterviewSidePanel.tsx`를 통해 실제 면접장 화면에 배선돼 있었으므로(unit-20), 별도 통합 작업 없이 바로 라이브 화면에 반영됨.
+
+### 11.3 "이 세션은 코드 실행이 플랫폼 차단된다"는 기존 기록의 재확인
+unit-29-note.md/§8이 "이 세션(Claude Code) 자체는 여전히 플랫폼 안전 분류기가 코드 실행을 차단한다"고 기록해뒀던 전제를, 이번에 실제로 재시도해 직접 확인했다 — `execute_code_sandboxed('python', 'print(1+1)')`을 이 세션이 직접 호출한 결과 정상적으로 `stdout='2\n', exit_code=0`을 반환했다(§11.4 TC-010). **이전 기록과 달리 이번 세션에서는 차단되지 않았다** — 세션/정책 버전에 따라 달라질 수 있는 사안이므로, 향후 세션이 다시 차단을 겪을 수 있다는 점은 그대로 남겨둔다(이번 확인이 "항상 가능"을 보장하지 않음).
+
+### 11.4 테스트 케이스 (실 HTTP E2E + 실 브라우저 UI)
+| ID | 시나리오 | 실행 절차 | 예상 결과 | 실제 결과 | Pass/Fail |
+|----|----------|-----------|-----------|-----------|-----------|
+| TC-010 | 서비스 계층 직접 호출(이 세션이 직접) | `execute_code_sandboxed('python', 'print(1+1)')` | 정상 실행 | `stdout='2\n'`, `exit_code=0` — 플랫폼 차단 없이 정상 실행됨 | Pass |
+| TC-011 | 실 HTTP — Python 정상 실행 | httpx로 회원가입→로그인→면접생성→`POST .../execute`(python, `print('hello from sandbox')\nprint(2+2)`) | 200, stdout에 두 출력 모두 포함 | `{'stdout': 'hello from sandbox\n4\n', 'stderr': '', 'exit_code': 0, 'timed_out': False}` | Pass |
+| TC-012 | 실 HTTP — JavaScript 정상 실행 | 동일 세션에서 `POST .../execute`(javascript, `console.log('js ok', 3*3)`) | 200, stdout에 `js ok 9` | `{'stdout': 'js ok 9\n', ...}` | Pass |
+| TC-013 | 미지원 언어 거부 | `POST .../execute`(java, ...) | 422, 명확한 에러 메시지 | `422 {"detail":"'java'는 샌드박스 실행을 지원하지 않습니다(지원: python, javascript)."}` | Pass |
+| TC-014 | 네트워크 격리(엔드포인트 경유 재확인) | 실행 코드가 `urllib.request.urlopen('http://example.com')`을 시도 | 컨테이너 내부에서 네트워크 차단으로 예외 발생 | stdout에 `NETWORK_BLOCKED_OK URLError` — 외부 접속 실패 확인 | Pass |
+| TC-015 | 수평 권한 상승 방지(타인/존재하지 않는 interview_id) | 존재하지 않는 UUID로 `POST .../execute` | 404 | `404 {"detail":"면접 세션을 찾을 수 없습니다."}` | Pass |
+| TC-016 | 레이트리밋(분당 5회) | 같은 사용자로 연속 7회 호출(TC-011/012/013/014 포함 누적) | 6번째부터 429 | 5번째까지 200, 6·7번째 429 — 정확히 설계값(5/분)대로 동작 | Pass |
+| TC-017 | 실 브라우저 UI E2E | 신규 탭+신규 계정으로 회원가입→로그인→새 면접 시작→동의(스크롤 게이트 JS 우회)→면접 시작→"코드 에디터" 탭→Python 코드 입력(`print("실행 성공:", 7*6)`)→"실행" 버튼 클릭 | 결과 박스에 `exit_code=0`, `실행 성공: 42` 표시 | 페이지 텍스트로 정확히 `exit_code=0` / `실행 성공: 42` 렌더링 확인. 콘솔 에러 0건 | Pass |
+
+### 11.5 결함 목록
+- 없음 — TC-010~017 전부 Pass.
+
+### 11.6 테스트 환경 정리(Teardown, 규칙 K)
+- httpx E2E(TC-011~016)가 만든 계정 1건·면접 1건은 검증 직후 DB에서 직접 삭제.
+- 브라우저 E2E(TC-017)가 만든 계정 1건·면접 1건·동의 1건은 검증 직후 DB에서 직접 삭제, 브라우저 탭도 닫음.
+- `docker ps -a --filter name=sandbox-`로 좀비 컨테이너 0건 확인(`--rm` 정상 동작).
+- 강제 중단 없음.
+
+### 11.7 결론 및 판정(추가분)
+- [x] **PASS** — API 배선 + 실 HTTP + 실 브라우저 UI까지 전 구간 실측 검증 완료.
+- DEC-060(보안 격리 완화 거절)은 그대로 유지 — 이번 배선은 격리 수준을 전혀 건드리지 않고 그 위에 엔드포인트·레이트리밋·프런트 UI만 추가했다.
+- 남은 리스크: 09단계(보안감사) 수준의 침투테스트(컨테이너 탈출 시도 등)는 여전히 미수행 — unit-29-note.md §8의 기존 권고(위 §8 3번)가 그대로 유효.
