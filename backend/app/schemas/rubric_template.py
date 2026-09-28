@@ -31,3 +31,18 @@ class RubricTemplateOut(BaseModel):
     criteria: list[RubricCriterionIn]
     is_system_default: bool
     created_at: datetime
+
+
+class RubricTemplateAssignIn(BaseModel):
+    """v15(03-system-design v4 §4.6 (2), unit-37) —
+    `PUT /recruiter/interviews/{id}/rubric-template` 요청 바디.
+    """
+
+    rubric_template_id: UUID
+
+
+class RubricTemplateAssignOut(BaseModel):
+    interview_id: UUID
+    rubric_template_id: UUID
+    # 재채점 job이 새로 투입됐을 때만 값이 있다(§4.6 (2) 202 응답).
+    job_id: str | None = None

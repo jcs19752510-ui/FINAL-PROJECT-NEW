@@ -36,6 +36,7 @@ from app.db.session import SessionLocal
 from app.models.evaluation_report import EvaluationReport, OverallRecommendation, PassFailRecommendation
 from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
+from app.models.rubric_template import RubricTemplate
 from app.models.transcript import InputMode, Speaker, Transcript
 from app.services import interview_prompts, rag_engine
 from app.services.celery_app import celery_app
@@ -43,10 +44,14 @@ from app.services.llm_engine import (
     LlmGenerationError,
     ReportParsingFailed,
     TurnLLMOutput,
+    available_input_tokens,
+    count_tokens,
     generate_report_response,
     generate_turn_response,
+    report_max_tokens,
 )
 from app.services.prompt_safety import log_persona_leak_detected
+from app.services.rubric_defaults import SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
 from app.services.ws_publisher import publish_ws_event
@@ -327,6 +332,9 @@ def _save_evaluation_report(
     star_json: dict | None,
     summary_text: str | None,
     details_json: dict | None,
+    rubric_template_id: uuid.UUID | None = None,
+    rubric_snapshot_json: dict | None = None,
+    criteria_scores_json: list | None = None,
 ) -> None:
     """`interview_id` UK 제약(1면접=1리포트)이라 최초 생성/재시도(regenerate) 모두
     같은 행을 upsert한다 — `existing`이 있으면 갱신, 없으면 새로 만든다.
@@ -340,8 +348,113 @@ def _save_evaluation_report(
     report.star_json = star_json
     report.summary_text = summary_text
     report.details_json = details_json
+    # v15(03-system-design v4 §4.6 (4), unit-37): 재시도/파싱실패 경로에서도 템플릿
+    # 스냅샷은 남긴다(그래야 "어떤 기준으로 채점을 시도했는지"가 기록에 남는다).
+    report.rubric_template_id = rubric_template_id
+    report.rubric_snapshot_json = rubric_snapshot_json
+    report.criteria_scores_json = criteria_scores_json
     if existing is None:
         db.add(report)
+
+
+def _resolve_rubric_template(interview: Interview, db: Session) -> RubricTemplate | None:
+    """v15(03-system-design v4 §4.6 (3) "템플릿 결정 순서") — 면접에 지정된 템플릿 →
+    (없거나 FK가 `ON DELETE SET NULL`로 비워졌으면) 시스템 기본 → (그것도 없으면,
+    이론상 발생하지 않지만) None(레거시 3축만).
+    """
+    if interview.rubric_template_id is not None:
+        template = db.get(RubricTemplate, interview.rubric_template_id)
+        if template is not None:
+            return template
+    return db.get(RubricTemplate, SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID)
+
+
+def _number_transcript(transcripts: list[Transcript]) -> tuple[list[str], dict[int, str]]:
+    """§4.6 (3) "답변 번호" — 지원자 발화에만 [답변 N]을 매긴다(N=1부터, 시간순).
+    `answer_map`은 번호→TRANSCRIPTS.id 대응표(§4.6 (4) `rubric_snapshot_json.answer_map`
+    의 원본) — 이후 입력 예산으로 일부 발화를 줄여도 번호와 id는 바뀌지 않는다.
+    """
+    lines: list[str] = []
+    answer_map: dict[int, str] = {}
+    n = 0
+    for t in transcripts:
+        text = _truncate_for_llm(t.content_text, _REPORT_MAX_LINE_CHARS)
+        if t.speaker == Speaker.ai:
+            lines.append(f"면접관: {text}")
+        else:
+            n += 1
+            answer_map[n] = str(t.id)
+            lines.append(f"[답변 {n}] 지원자: {text}")
+    return lines, answer_map
+
+
+def _budget_transcript_lines(
+    lines: list[str], system_prompt: str, criteria_block: str, output_tokens: int
+) -> list[str]:
+    """§4.6 (3) "입력 길이 예산" — 예산을 넘으면 첫 줄(오프닝 질문)과 최근 발화만
+    남기고 가운데를 "(중간 발화 N개 생략)"으로 줄인다. 토큰 수는 llama-server
+    `/tokenize`로 실측한다(글자 수 추정 금지, 03-system-design v4 §4.6 (3)).
+    """
+    if len(lines) <= 3:
+        return lines
+    budget = available_input_tokens(output_tokens)
+    keep = len(lines) - 1  # 마지막 몇 줄을 유지할지(첫 줄 제외)
+    while keep > 2:
+        if keep >= len(lines) - 1:
+            candidate = lines
+        else:
+            omitted = len(lines) - 1 - keep
+            candidate = [lines[0], f"(중간 발화 {omitted}개 생략)"] + lines[-keep:]
+        message = interview_prompts.format_transcript_for_report(candidate, criteria_block)
+        total = count_tokens(system_prompt) + count_tokens(message)
+        if total <= budget:
+            return candidate
+        keep -= 2  # 질문+답변 한 쌍 단위로 줄인다
+    omitted = len(lines) - 1 - 2
+    return [lines[0], f"(중간 발화 {omitted}개 생략)"] + lines[-2:]
+
+
+def _validate_criteria_scores(
+    raw_scores: list, criteria: list[dict], answer_map: dict[int, str]
+) -> list[dict]:
+    """§4.6 (3) "서버 검증" — LLM 출력을 그대로 믿지 않는다. 템플릿에 없는 이름은
+    버리고, 템플릿에 있는데 모델이 빠뜨린 항목은 점수 없이 채워 넣는다(점수를
+    지어내지 않는다).
+    """
+    by_name = {}
+    for item in raw_scores:
+        criterion = (item.criterion or "").strip()
+        if not any(c["name"] == criterion for c in criteria):
+            continue  # 템플릿에 없는 이름 — 채택하지 않음
+        if item.score is None or not (1 <= item.score <= 5):
+            continue  # 범위 밖 점수는 미채점과 동일하게 취급
+        valid_refs = sorted({ref for ref in item.answer_refs if ref in answer_map})
+        by_name[criterion] = {
+            "criterion": criterion,
+            "score": item.score,
+            "evidence": (item.evidence or "")[:300] or "평가 근거 부족",
+            "answer_refs": valid_refs,
+        }
+    result = []
+    for c in criteria:
+        result.append(by_name.get(c["name"], {
+            "criterion": c["name"], "score": None, "evidence": "평가 근거 부족", "answer_refs": [],
+        }))
+    return result
+
+
+def _weighted_overall_score(criteria_scores: list[dict], criteria: list[dict]) -> float | None:
+    """§4.6 (3) "종합 점수" — 채점된 항목의 가중 평균(가중치 합이 0이면 단순 평균).
+    채점된 항목이 하나도 없으면 None(호출부가 레거시 3축 평균으로 대체).
+    """
+    weight_by_name = {c["name"]: c.get("weight", 0) for c in criteria}
+    scored = [(s["score"], weight_by_name.get(s["criterion"], 0)) for s in criteria_scores if s["score"] is not None]
+    if not scored:
+        return None
+    weight_sum = sum(w for _, w in scored)
+    if weight_sum <= 0:
+        return round(sum(s for s, _ in scored) / len(scored), 1)
+    return round(sum(s * w for s, w in scored) / weight_sum, 1)
 
 
 @celery_app.task(name="app.worker.tasks.process_report_generation_job", bind=True)
@@ -366,21 +479,35 @@ def process_report_generation_job(self, interview_id: str) -> None:
         transcripts = db.scalars(
             select(Transcript).where(Transcript.interview_id == interview_uuid).order_by(Transcript.turn_index)
         ).all()
-        lines = [
-            f"{'면접관' if t.speaker == Speaker.ai else '지원자'}: "
-            f"{_truncate_for_llm(t.content_text, _REPORT_MAX_LINE_CHARS)}"
-            for t in transcripts
-        ]
-        system_prompt = interview_prompts.build_report_system_prompt()
-        user_message = interview_prompts.format_transcript_for_report(lines)
+        lines, answer_map = _number_transcript(transcripts)
+
+        template = _resolve_rubric_template(interview, db)
+        criteria: list[dict] = list(template.criteria_json) if template is not None else []
+        criteria_block = interview_prompts.format_criteria_block(criteria)
+        system_prompt = interview_prompts.build_report_system_prompt(has_criteria=bool(criteria))
+        max_tokens = report_max_tokens(len(criteria))
+        budgeted_lines = _budget_transcript_lines(lines, system_prompt, criteria_block, max_tokens)
+        user_message = interview_prompts.format_transcript_for_report(budgeted_lines, criteria_block)
+
+        rubric_snapshot = (
+            {
+                "template_id": str(template.id),
+                "name": template.name,
+                "criteria": criteria,
+                "answer_map": {str(k): v for k, v in answer_map.items()},
+            }
+            if template is not None
+            else None
+        )
 
         existing = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_uuid))
 
         try:
-            output = generate_report_response(system_prompt, user_message)
+            output = generate_report_response(system_prompt, user_message, max_tokens=max_tokens)
         except ReportParsingFailed as exc:
             # §4.4 파싱 실패 폴백: star_json/점수 없이 원문을 summary_text에 저장하되
-            # report_status는 그대로 ready로 표시한다(리포트 자체는 존재).
+            # report_status는 그대로 ready로 표시한다(리포트 자체는 존재). 템플릿
+            # 스냅샷은 "어떤 기준으로 채점을 시도했는지" 기록으로 그대로 남긴다.
             _save_evaluation_report(
                 db,
                 existing,
@@ -393,6 +520,9 @@ def process_report_generation_job(self, interview_id: str) -> None:
                 star_json=None,
                 summary_text=exc.raw_text,
                 details_json=None,
+                rubric_template_id=template.id if template is not None else None,
+                rubric_snapshot_json=rubric_snapshot,
+                criteria_scores_json=None,
             )
             interview.report_status = ReportStatus.ready
             interview.overall_score = None
@@ -409,13 +539,45 @@ def process_report_generation_job(self, interview_id: str) -> None:
             _publish_error(interview_uuid, job_id, "REPORT_GENERATION_FAILED", "리포트 생성에 실패했습니다.")
             return
 
-        overall_score = round(
+        # §4.6 (3) "부분 실패 격리": criteria_scores 검증에서 문제가 생겨도 STAR/3축
+        # 점수 등 나머지 리포트는 그대로 저장한다.
+        criteria_scores_json: list[dict] | None = None
+        weighted_score: float | None = None
+        if criteria:
+            try:
+                criteria_scores_json = _validate_criteria_scores(output.criteria_scores, criteria, answer_map)
+                # 실측 결함(2026-09-23, unit-37 기준선): 1.5B 모델이 JSON 자체는
+                # 유효하게 만들면서도 `criteria_scores` 필드를 통째로 빠뜨리는 경우가
+                # 3회 중 1회 관측됐다(이름 표기가 아니라 필드 누락 — 파싱은 성공하므로
+                # generate_report_response의 파싱 재시도로는 걸러지지 않는다). 이
+                # 경로에서만 한 번 더 생성을 시도하고, 그래도 비어 있으면 기존 원칙대로
+                # "점수 없음"으로 저장한다(점수를 지어내지 않음).
+                if not any(s["score"] is not None for s in criteria_scores_json):
+                    logger.warning("criteria_scores 전부 미채점 — 1회 재생성 시도")
+                    try:
+                        retry_output = generate_report_response(system_prompt, user_message, max_tokens=max_tokens)
+                        retry_scores = _validate_criteria_scores(retry_output.criteria_scores, criteria, answer_map)
+                        if any(s["score"] is not None for s in retry_scores):
+                            output = retry_output
+                            criteria_scores_json = retry_scores
+                    except (ReportParsingFailed, LlmGenerationError):
+                        logger.warning("criteria_scores 재생성 실패 — 미채점 상태로 계속 진행", exc_info=True)
+                weighted_score = _weighted_overall_score(criteria_scores_json, criteria)
+            except Exception:  # noqa: BLE001 — 항목별 채점만 실패로 격리, 리포트 전체는 계속 저장
+                logger.warning("criteria_scores 검증 중 예외 — 항목별 채점 없이 계속 진행", exc_info=True)
+                criteria_scores_json = None
+
+        legacy_score = round(
             (output.technical_accuracy + output.communication_clarity + output.cultural_fit) / 3, 1
         )
+        overall_score = weighted_score if weighted_score is not None else legacy_score
         _save_evaluation_report(
             db,
             existing,
             interview_uuid,
+            rubric_template_id=template.id if template is not None else None,
+            rubric_snapshot_json=rubric_snapshot,
+            criteria_scores_json=criteria_scores_json,
             technical_score=output.technical_accuracy,
             communication_score=output.communication_clarity,
             cultural_fit_score=output.cultural_fit,

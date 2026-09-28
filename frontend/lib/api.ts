@@ -269,6 +269,30 @@ export interface RecruiterReportDetailOut extends RecruiterInterviewListItemOut 
   star: StarOut | null;
   summary_text: string | null;
   details: Record<string, unknown> | null;
+  rubric: RubricReportOut | null;
+}
+
+// v15(03-system-design v4 §4.6 (5), unit-37, REQ-010/012): 루브릭 항목별 채점.
+// 이 기능 이전 리포트나 템플릿을 찾지 못한 레거시 경로는 `rubric: null`이다.
+export interface RubricCriterionScore {
+  name: string;
+  weight: number;
+  description: string;
+  score: number | null;
+  evidence: string;
+  answer_refs: number[];
+}
+
+export interface RubricAnswer {
+  no: number;
+  excerpt: string;
+}
+
+export interface RubricReportOut {
+  template_id: string;
+  name: string;
+  criteria: RubricCriterionScore[];
+  answers: RubricAnswer[];
 }
 
 // 캐노니컬 `GET /interviews/{id}/report`(지원자/채용담당자 공용, 03-design §4.2).
@@ -286,6 +310,7 @@ export interface ReportOut {
   star: StarOut | null;
   summary_text: string | null;
   details: Record<string, unknown> | null;
+  rubric: RubricReportOut | null;
   disclaimer: string;
 }
 
@@ -482,6 +507,22 @@ export function getWhiteboard(
   });
 }
 
+// unit-35(REQ-021 부분 재도입, 2026-09-23): 로컬 SmolVLM(무료) 비전 분석.
+// disclaimer는 항상 채워져 내려온다(whiteboard_vision.py LOW_CONFIDENCE_DISCLAIMER) —
+// 모델 품질이 낮다는 실측 근거에 따른 필수 고지이므로 화면에서 생략하면 안 된다.
+export interface WhiteboardAnalysisOut {
+  analysis: string;
+  disclaimer: string;
+  model: string;
+}
+
+export function analyzeWhiteboard(accessToken: string, interviewId: string): Promise<WhiteboardAnalysisOut> {
+  return request<WhiteboardAnalysisOut>(`/interviews/${interviewId}/whiteboard/analyze`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
 // REQ-014(unit-13): 03-system-design.md §3.1(RUBRIC_TEMPLATES)/§4.2
 // `/recruiter/rubric-templates`, 04-ux-design.md [R-03]. `recruiter_id`가 null이면
 // 시스템 기본 템플릿(모든 recruiter가 조회 가능, 직접 수정은 불가 — 복사해서 새로
@@ -527,5 +568,27 @@ export function updateRubricTemplate(
     method: "PATCH",
     headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify(input),
+  });
+}
+
+// v15(03-system-design v4 §4.6 (2), unit-37, REQ-010/014, DEC-054/055): 면접에
+// 채점용 루브릭 템플릿을 지정/변경한다. `job_id`가 있으면 재채점이 새로 투입된
+// 것이다(04-ux-design [R-02] "이 템플릿으로 다시 채점" 처리 참고). 409/503은
+// 호출부가 `ApiError.status`로 구분해 처리한다.
+export interface RubricTemplateAssignOut {
+  interview_id: string;
+  rubric_template_id: string;
+  job_id: string | null;
+}
+
+export function assignRubricTemplate(
+  accessToken: string,
+  interviewId: string,
+  rubricTemplateId: string,
+): Promise<RubricTemplateAssignOut> {
+  return request<RubricTemplateAssignOut>(`/recruiter/interviews/${interviewId}/rubric-template`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ rubric_template_id: rubricTemplateId }),
   });
 }
