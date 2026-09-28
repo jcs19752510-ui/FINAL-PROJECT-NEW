@@ -11,17 +11,23 @@ AI Worker가 기록하며, 이번 유닛은 그 워커를 만들지 않는다(jo
 QUESTIONS가 아직 없어 FK 제약 없이 nullable 컬럼만 만들었으나(unit-2의
 `rubric_template_id` 선례), unit-7이 QUESTIONS를 생성하면서 별도 revision으로 FK
 제약을 추가했다(`app/models/question.py`, RAG로 선정된 질문은행 항목을 가리킴).
+
+`content_text` 암호화(2026-09-28, DEC-078): AI 질문·지원자 답변 전체 대화가
+그대로 담기는 가장 민감한 컬럼이라 `EncryptedText`(AES-256-GCM, `app/services/
+field_encryption.py`)로 저장 시 투명 암호화한다. ORM으로 읽고 쓰는 코드는
+전혀 바뀌지 않는다(일반 `Text` 컬럼처럼 동작).
 """
 import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
 from app.models.question import Question  # noqa: F401  # FK 대상 테이블 메타데이터 등록 필요(아래 참고)
+from app.services.field_encryption import EncryptedText
 
 # SQLAlchemy는 `ForeignKey("questions.id")`를 해석할 때 `questions` 테이블이 이미
 # `Base.metadata`에 등록되어 있어야 한다. alembic/env.py는 모든 모델을 명시적으로
@@ -55,7 +61,7 @@ class Transcript(Base):
     turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
     speaker: Mapped[Speaker] = mapped_column(Enum(Speaker, name="transcript_speaker"), nullable=False)
     input_mode: Mapped[InputMode] = mapped_column(Enum(InputMode, name="transcript_input_mode"), nullable=False)
-    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_text: Mapped[str] = mapped_column(EncryptedText, nullable=False)
     audio_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # unit-24(원안 REQ-018/019 축소판, 음성 Prosody 분석, 2026-09-22 사용자 승인).
     # `app/services/prosody_engine.analyze_prosody()`의 원시 수치 반환값 그대로 저장.
