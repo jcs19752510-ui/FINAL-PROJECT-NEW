@@ -54,6 +54,22 @@
 - 게이트 1·2(문법/린트): `py_compile app/services/whiteboard_vision.py` 통과,
   `ruff check app/services/whiteboard_vision.py` — "All checks passed!"
 
+### 4-1. 후속 세션 추가 — 로컬 VLM 실연결(2026-09-23, DEC-061, unit-35-note.md §6)
+| ID | 시나리오 | 사전조건 | 실행 절차 | 예상 결과 | 실제 결과 | Pass/Fail | 비고 |
+|----|----------|----------|-----------|-----------|-----------|-----------|------|
+| TC-011 | `analyze_diagram_local()` 실제 호출(콜드 스타트) | SmolVLM 서버 미기동 상태 | 박스2+화살표1 다이어그램을 렌더링 후 `analyze_diagram_local()` 호출 | 서버 자동 기동 후 문자열 응답 반환(예외 없음) | 31.0초 만에 `"2"` 반환(모델 로드+헬스체크 대기 포함), 예외 없음 | PASS | 응답 품질 자체는 낮음(한 글자) — §ux 참고, 이는 결함이 아니라 §6에 기록된 기존에 알려진 모델 한계 |
+| TC-012 | `analyze_diagram_local()` 재호출(웜 상태) | TC-011 직후, 서버 계속 기동 중 | 동일 함수 재호출 | 서버 재기동 없이 빠르게 응답 | 0.4초 만에 동일 응답 `"2"` 반환, "이미 응답하는 SmolVLM 서버가 있어 재사용합니다" 로그 확인 | PASS | 포트 재사용 로직(llm_engine.py와 동일 패턴) 실측 확인 |
+| TC-013 | FastAPI 라우트 등록 확인 | 없음 | `from app.main import app` 후 `app.routes`에서 `whiteboard` 포함 경로 조회 | `/api/v1/interviews/{interview_id}/whiteboard/analyze` POST 라우트 존재 | 3개 라우트(GET/PUT 기존 2개 + 신규 POST 1개) 확인 | PASS | DB 연결 없이 앱 구성 단계만 검증(§7 참고, 실제 HTTP 왕복은 미검증) |
+| TC-014 | 프론트엔드 타입 검사 | 없음 | `frontend`에서 `npx tsc --noEmit` 실행 | 타입 에러 0건 | 출력 없음(에러 0건) | PASS | `WhiteboardCanvas.tsx`/`lib/api.ts` 신규 코드 포함 전체 프로젝트 기준 |
+| TC-015 | 실제 HTTP E2E(인증 포함) | Docker Desktop 기동, DB/Redis 컨테이너(`final-project-db`/`final-project-redis`) 기동, uvicorn(127.0.0.1:8000) 실행 | httpx로 (1)회원가입 (2)로그인 (3)`POST /interviews` (4)`PUT .../whiteboard`(스트로크 저장) (5)`POST .../whiteboard/analyze` 순서로 실제 호출 | 200 OK 연쇄, analyze가 `{analysis, disclaimer, model}` 반환 | 전부 200/201 성공. analyze 첫 호출 28.4초(SmolVLM 콜드부트), 같은 서버 재호출 0.4초(웜) — TC-011/012 실측과 일치. 응답: `{"analysis": "2", "disclaimer": "⚠️ AI 참고용...", "model": "SmolVLM-500M-Instruct (local)"}` | PASS | `.harness-tmp` 밖(Claude 세션 스크래치패드)에 작성한 일회성 스크립트로 실행, DB에 생성된 테스트 계정 2건+면접 2건+스냅샷 2건은 테스트 직후 전부 삭제 완료(규칙 K) |
+
+- 실행 방법: `.harness-tmp`에 임시 스크립트(`verify_whiteboard_vision.py`,
+  실제로는 Claude 세션 스크래치패드에 작성해 프로젝트 저장소 `.harness-tmp`는
+  거치지 않음 — 규칙 K상 정리 대상 아님, 프로젝트 파일이 아니므로).
+- TC-011~012는 실제 `llama-server.exe`(SmolVLM-500M-Instruct + mmproj) 서브
+  프로세스를 기동해 진짜 추론을 실행했다(mock 아님) — 테스트 종료 후 해당
+  프로세스(PID 7480)는 종료 처리함(규칙 K).
+
 ## 5. 커버리지
 - `render_strokes_to_png()`: 정상 경로(다중점/단일점/빈목록) + 예외 경로(빈
   points, 결손 필드) + 경계값(width 상한) 전부 실행 커버. 커버되지 않은 것:
@@ -85,18 +101,31 @@
   정리 대상이 아님(규칙 K는 "이번 테스트에서 생성한" 아티팩트만 대상으로 함).
 
 ## 8. 리스크 및 잔존 이슈
-- REQ-021 전체 목표(다이어그램을 AI가 보고 타당성 평가)는 아직 미달성 — 렌더링
-  부분만 실질적으로 완료. API 키 확보 전까지 "완료"로 볼 수 없음(unit-35-note.md
-  §3).
+- (2026-09-23 초 시점 기준, §4-1 이전) REQ-021 전체 목표는 미달성 — 렌더링
+  부분만 완료. **§4-1 이후 갱신**: 로컬 SmolVLM 경로는 실제로 연결·실행 검증
+  됐다(TC-011~012). GPT-4V(유료) 경로는 여전히 미검증·미연결 상태로 유지.
 - `_CANVAS_SIZE`(1200×800)가 실제 프론트 캔버스 크기와 일치하는지 미검증
-  (unit-35-note.md §5-1).
-- 이 코드는 어떤 API 엔드포인트에도 배선되지 않아 현재 라이브 영향은 없음(회귀
-  위험 없음).
+  (unit-35-note.md §5-1) — 여전히 미해결.
+- **(§4-2 이후 갱신)** 엔드포인트가 실제로 배선됐다(`POST
+  /interviews/{id}/whiteboard/analyze`) — "회귀 위험 없음"이라는 기존 서술은
+  더 이상 유효하지 않다. TC-015로 인증 포함 실제 HTTP 왕복까지 검증 완료 —
+  09단계(보안검증) 착수 전 필요했던 재검증 항목이 해소됐다. 다만 09단계에서는
+  별도로 침투테스트 수준(인증 우회 시도, 타 사용자 interview_id로 분석 시도 등)
+  재검증이 필요하다(이번 세션은 정상 경로만 확인).
+- SmolVLM 응답 품질이 실측으로 매우 낮음을 재확인(한 글자 응답) — 코드
+  결함이 아니라 알려진 모델 한계이며, 프런트 disclaimer로 완화했다(단독
+  평가 근거로 쓰지 말라는 경고를 항상 동봉).
 
 ## 9. 결론 및 판정
-- [x] PASS — 다음 단계 진행 가능(7절 Teardown 확인 완료). 단, REQ-021 자체는
-  "부분착수"이며 08(전체시스템테스트) 착수 전 API 키·배선 여부에 대한 사용자
-  결정이 별도로 필요함(unit-35-note.md §5-3).
+- [x] PASS — §4(TC-001~010), §4-1(TC-011~014), §4-2(TC-015, 실제 HTTP E2E)
+  전부 실측 PASS로 CONDITIONAL 상태를 해소했다. 2026-09-23 사용자 요청으로
+  Docker Desktop을 실제로 기동하고(약 4분 소요, 실패 아님 — 최초 기동 지연),
+  기존 `final-project-db`/`final-project-redis` 컨테이너 재기동 + uvicorn
+  실행 + httpx로 회원가입→로그인→면접생성→화이트보드저장→분석 전 구간을 실제
+  HTTP로 검증했다(TC-015). 화이트보드 AI비전(로컬 SmolVLM 경로)은 이제 "코드
+  작성"이 아니라 "실제로 동작 확인됨" 수준까지 도달했다 — 단 모델 응답 품질
+  자체는 여전히 매우 낮다(§8 참고, 이는 검증 완료 여부와 별개 사안). REQ-021은
+  "부분착수(로컬 경로 실HTTP 검증 완료, 품질은 낮음)"로 상태를 갱신한다.
 
 ## 10. 내부 검증
 - L1 경량판 — 1차 검증(작성자 관점 자가 재검토)에서 결함 0건(테스트 실행

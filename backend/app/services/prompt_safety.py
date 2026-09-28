@@ -137,3 +137,24 @@ def check_and_increment_preview_rate_limit(user_id: str) -> None:
         raise RateLimitExceeded(
             f"실시간 인식 요청이 분당 {_PREVIEW_RATE_LIMIT_MAX_REQUESTS}회 상한을 초과했습니다."
         )
+
+
+# unit-29 후속(2026-09-24, 사용자 승인 — 신뢰할 수 없는 코드를 실제로 실행하는
+# 기능이라 다른 두 한도보다 훨씬 보수적으로 잡는다): 매 요청이 Docker 컨테이너
+# 기동(수백ms~수초)을 유발해 LLM 턴(10/분)보다 훨씬 무겁고, 격리가 뚫렸을 때의
+# 피해 반경도 더 크다 — fork bomb류 자원고갈 시도를 반복 제출로 우회하지 못하게
+# 분당 5회로 제한한다(구현 세부값, 필요 시 09단계 보안감사에서 재조정).
+_SANDBOX_RATE_LIMIT_MAX_REQUESTS = 5
+
+
+def check_and_increment_sandbox_rate_limit(user_id: str) -> None:
+    """코드 샌드박스 실행 전용 분당 상한 — 다른 두 한도와 독립된 Redis 키."""
+    key = f"rate_limit:code_sandbox:{user_id}"
+    redis = _get_redis()
+    count = redis.incr(key)
+    if count == 1:
+        redis.expire(key, _RATE_LIMIT_WINDOW_SECONDS)
+    if count > _SANDBOX_RATE_LIMIT_MAX_REQUESTS:
+        raise RateLimitExceeded(
+            f"코드 실행 요청이 분당 {_SANDBOX_RATE_LIMIT_MAX_REQUESTS}회 상한을 초과했습니다."
+        )

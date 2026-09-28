@@ -32,8 +32,10 @@ multipart)"라고 명시했으므로 별도 엔드포인트를 신설하지 않�
 따라 음성 제출일 때만 매 요청 실시간으로 `biometric_voice` 동의를 재검사하고,
 동의가 없거나 철회됐으면 `403 CONSENT_REQUIRED_VOICE`를 반환하며 오디오는 어떤
 형태로도 저장하지 않는다(`app/services/stt_engine.py`가 디스크에 파일을 쓰지 않고
-메모리에서만 처리). STT(`transcribe_audio`)는 실제로 동작하지만, AI 응답 생성
-(LLM 꼬리질문)은 여전히 unit-7 범위라 `enqueue_turn_job` 스텁을 그대로 재사용한다.
+메모리에서만 처리). STT(`stt_router.transcribe_audio_smart`, 2026-09-23 DEC-063
+배선 — `DEEPGRAM_API_KEY` 있으면 Deepgram 우선, 없거나 실패하면 faster-whisper로
+자동 폴백)는 실제로 동작하지만, AI 응답 생성(LLM 꼬리질문)은 여전히 unit-7 범위라
+`enqueue_turn_job` 스텁을 그대로 재사용한다.
 
 범위(unit-6, Feature C, REQ-006): `POST /interviews/{id}/tts-preview`(신규,
 설계서 §4.2 REST 표에는 없는 준비/검증 엔드포인트 — 아래 라우터 docstring 참고).
@@ -64,12 +66,15 @@ from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.transcript import InputMode, Speaker, Transcript
 from app.models.user import User, UserRole
 from app.schemas.interview import (
+    CriterionScoreOut,
     InterviewDetailOut,
     InterviewEndResponse,
     InterviewListItemOut,
     InterviewOut,
     InterviewStartResponse,
     ReportOut,
+    RubricAnswerOut,
+    RubricOut,
     StarOut,
 )
 from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
@@ -81,7 +86,9 @@ from app.services.prompt_safety import (
     log_injection_attempt,
 )
 from app.services.prosody_engine import ProsodyAnalysisError, analyze_prosody
-from app.services.stt_engine import SttTranscriptionError, transcribe_audio
+from app.services.rubric_defaults import SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID
+from app.services.stt_engine import SttTranscriptionError
+from app.services.stt_router import transcribe_audio_smart
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
 
@@ -166,6 +173,9 @@ def create_interview(
         candidate_id=current_user.id,
         status=InterviewStatus.scheduled,
         report_status=ReportStatus.none,
+        # v15(03-system-design v4 §4.6 (2), unit-37): 새 면접은 항상 시스템 기본
+        # 템플릿으로 시작한다. 지원자는 직접 지정할 수 없다(recruiter 전용 API).
+        rubric_template_id=SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID,
     )
     db.add(interview)
     db.commit()
@@ -291,7 +301,60 @@ def _get_report_viewable_interview(interview_id: UUID, current_user: User, db: S
     return interview
 
 
-def _report_to_out(interview: Interview, report: EvaluationReport | None) -> ReportOut:
+def _build_rubric_out(report: EvaluationReport, db: Session) -> RubricOut | None:
+    """v15(03-system-design v4 §4.6 (5), unit-37) — `rubric_snapshot_json`/
+    `criteria_scores_json`에서 응답용 `rubric`을 조립한다. 발췌는 저장하지 않고
+    이 시점에 `answer_map`의 id로 TRANSCRIPTS에서 읽는다(§4.6 (5)). 원문이 삭제된
+    번호는 `answers`에서 빠진다(§4.6 (5), REQ-030과의 상호작용).
+    """
+    if report is None or report.rubric_template_id is None or not report.rubric_snapshot_json:
+        return None
+    snapshot = report.rubric_snapshot_json
+    criteria_defs = snapshot.get("criteria", [])
+    answer_map: dict[str, str] = snapshot.get("answer_map", {})
+    scores_by_name = {s["criterion"]: s for s in (report.criteria_scores_json or [])}
+
+    criteria_out: list[CriterionScoreOut] = []
+    referenced_nos: set[int] = set()
+    for c in criteria_defs:
+        s = scores_by_name.get(c["name"], {})
+        refs = s.get("answer_refs", [])
+        criteria_out.append(
+            CriterionScoreOut(
+                name=c["name"],
+                weight=c.get("weight", 0),
+                description=c.get("description") or "",
+                score=s.get("score"),
+                evidence=s.get("evidence") or "평가 근거 부족",
+                answer_refs=refs,
+            )
+        )
+        referenced_nos.update(refs)
+
+    answers_out: list[RubricAnswerOut] = []
+    id_to_no: dict[UUID, int] = {}
+    for no in referenced_nos:
+        raw_id = answer_map.get(str(no))
+        if raw_id:
+            try:
+                id_to_no[UUID(raw_id)] = no
+            except ValueError:
+                continue
+    if id_to_no:
+        rows = db.scalars(select(Transcript).where(Transcript.id.in_(id_to_no.keys()))).all()
+        for t in rows:
+            answers_out.append(RubricAnswerOut(no=id_to_no[t.id], excerpt=t.content_text[:120]))
+        answers_out.sort(key=lambda a: a.no)
+
+    return RubricOut(
+        template_id=report.rubric_template_id,
+        name=snapshot.get("name", ""),
+        criteria=criteria_out,
+        answers=answers_out,
+    )
+
+
+def _report_to_out(interview: Interview, report: EvaluationReport | None, db: Session) -> ReportOut:
     star = StarOut(**report.star_json) if report is not None and report.star_json else None
     return ReportOut(
         interview_id=interview.id,
@@ -309,6 +372,7 @@ def _report_to_out(interview: Interview, report: EvaluationReport | None) -> Rep
         star=star,
         summary_text=report.summary_text if report else None,
         details=report.details_json if report else None,
+        rubric=_build_rubric_out(report, db) if report is not None else None,
     )
 
 
@@ -337,7 +401,7 @@ def get_report(
         )
 
     report = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_id))
-    return _report_to_out(interview, report)
+    return _report_to_out(interview, report, db)
 
 
 @router.post("/{interview_id}/report/regenerate", status_code=status.HTTP_202_ACCEPTED)
@@ -510,9 +574,10 @@ async def _submit_voice_turn(
     (1) `biometric_voice` 동의를 **매 요청마다 실시간으로 DB 재조회**해 검사한다
     (세션 컨텍스트 캐시 금지, §6.2). 동의가 없거나 철회됐으면 오디오를 조금도
     읽지 않고(멀티파트 파싱조차 시도하지 않고) 즉시 403을 반환한다.
-    (2) STT는 `app/services/stt_engine.py`(faster-whisper)로 실제 변환하며, 변환에
-    쓰인 오디오 바이트는 메모리에서만 존재하다가 함수 종료와 함께 버려진다(디스크
-    미기록, §6.2 최소수집).
+    (2) STT는 `app/services/stt_router.py`(2026-09-23 DEC-063: `DEEPGRAM_API_KEY`
+    설정 시 Deepgram 우선, 없거나 실패하면 faster-whisper로 자동 폴백)로 실제
+    변환하며, 변환에 쓰인 오디오 바이트는 메모리에서만 존재하다가 함수 종료와 함께
+    버려진다(디스크 미기록, §6.2 최소수집).
     (3) 변환된 텍스트만 `TRANSCRIPTS(input_mode=voice, audio_ref=null)`로 영구 저장한다.
     (4) AI 응답 생성(LLM)은 unit-7 범위라 텍스트 턴과 동일하게 `enqueue_turn_job`
     스텁으로 202 계약만 충족한다.
@@ -560,7 +625,7 @@ async def _submit_voice_turn(
         # 없이 부르면 그 몇 초 동안 프로세스 전체의 이벤트 루프가 멈춘다(다른 모든
         # 요청/WS가 응답 불능이 됨) — 음성 답변 제출이 실제 백엔드 행을 일으킨
         # 근본 원인 중 하나로 확인되어 명시적으로 스레드풀에 위임한다.
-        text = await run_in_threadpool(transcribe_audio, audio_bytes)
+        text = await run_in_threadpool(transcribe_audio_smart, audio_bytes, getattr(audio, "content_type", None))
     except SttTranscriptionError as exc:
         raise AppError(
             504,
@@ -723,7 +788,7 @@ async def submit_voice_preview(
         )
 
     try:
-        text = await run_in_threadpool(transcribe_audio, audio_bytes)
+        text = await run_in_threadpool(transcribe_audio_smart, audio_bytes, getattr(audio, "content_type", None))
     except SttTranscriptionError:
         # 미리보기는 부가 기능이라 STT가 실패해도 사용자 작업을 막지 않는다
         # (그레이스풀 디그레이드 — 다음 4초 조각에서 다시 시도됨).
