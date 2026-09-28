@@ -1,5 +1,15 @@
 """처리 중 워커 크래시로 유실된 job에 대한 실패 통지 (unit-7 재작업, DEF-008/DEC-035 Q3).
 
+2026-09-28(DEC-082, unit-10-test.md DEF-002 수정): 리포트 생성 job은 턴/오프닝
+job과 달리 DB에 `report_status`라는 지속 상태가 있고 화면도 WS가 아니라 폴링만
+쓰는데(`report/page.tsx` 참고), 기존 동작은 WS `error`만 발행하고 이 상태를
+그대로 `queued`에 방치해 화면이 "생성 중..."에서 영원히 멈췄다(사용자는 복구
+방법이 없음). `register_job()`에 `job_type`을 추가해 리포트 job임을 표시하고,
+타임아웃 시 턴/오프닝과 동일한 WS 통지에 더해 `Interview.report_status`를
+`failed`로 직접 전이한다 — `tasks.py`의 `LlmGenerationError` 처리 경로(정상
+실패 시나리오)가 이미 하는 것과 정확히 같은 전이라, 이미 구현·검증된 프론트
+"다시 생성하기" 버튼(`report/page.tsx`)이 그대로 동작한다(신규 UI 불필요).
+
 **DEC-035 Q3 채택안 "실패 통지(단순)"**: LLM 단계 처리 중 워커 프로세스가 죽으면
 Celery 기본 설정(`task_acks_late=False`)상 메시지는 이미 ack되어 재전달되지 않고,
 그 job은 영구히 유실된다(unit-7-test.md TC-014 실측 — 워커 재기동 후에도 해당 job
@@ -33,6 +43,8 @@ import redis.asyncio as aioredis
 from celery.result import AsyncResult
 
 from app.core.config import settings
+from app.db.session import SessionLocal
+from app.models.interview import Interview, ReportStatus
 from app.services.celery_app import celery_app
 from app.services.ws_publisher import publish_ws_event
 
@@ -64,10 +76,21 @@ def _report_watch_timeout() -> int:
     return settings.llm_report_timeout_seconds + _REPORT_TIMEOUT_MARGIN_SECONDS
 
 
-def register_job(interview_id: uuid.UUID | str, job_id: str, *, timeout_seconds: int | None = None) -> None:
+def register_job(
+    interview_id: uuid.UUID | str,
+    job_id: str,
+    *,
+    timeout_seconds: int | None = None,
+    job_type: str = "turn",
+) -> None:
     """`job_queue.py`가 enqueue 직후 호출한다. `timeout_seconds`를 생략하면 턴/오프닝
     기준 기본값(`_STARTED_TIMEOUT_SECONDS`)을 쓴다 — 리포트 job은
     `enqueue_report_generation_job`이 `_report_watch_timeout()`을 명시적으로 넘긴다.
+
+    `job_type`(2026-09-28, DEC-082, DEF-002 수정): "report"로 등록된 job만
+    타임아웃 시 `Interview.report_status`를 `failed`로 직접 전이한다(아래
+    `_check_job` 참고) — 턴/오프닝(`job_type="turn"`, 기본값)은 DB에 되돌릴
+    지속 상태가 없어 기존처럼 WS 통지만으로 충분하다.
     """
     client = redis.Redis.from_url(settings.redis_url)
     try:
@@ -77,11 +100,42 @@ def register_job(interview_id: uuid.UUID | str, job_id: str, *, timeout_seconds:
                 "interview_id": str(interview_id),
                 "started_seen_at": None,
                 "timeout_seconds": timeout_seconds if timeout_seconds is not None else _STARTED_TIMEOUT_SECONDS,
+                "job_type": job_type,
             }),
             ex=max(_WATCH_KEY_TTL_SECONDS, (timeout_seconds or 0) + _POLL_INTERVAL_SECONDS * 2),
         )
     finally:
         client.close()
+
+
+def _mark_report_failed(interview_id: str, job_id: str) -> None:
+    """리포트 job 유실 시 `Interview.report_status`를 `failed`로 전이한다 —
+    `tasks.py::process_report_generation_job`의 `LlmGenerationError` 처리 경로가
+    정상 실패 시나리오에서 수행하는 것과 동일한 전이라, 화면(`report/page.tsx`)의
+    기존 "다시 생성하기" 버튼이 그대로 동작한다.
+    """
+    db = SessionLocal()
+    try:
+        interview = db.get(Interview, uuid.UUID(interview_id))
+        if interview is None:
+            return
+        if interview.report_status == ReportStatus.queued:
+            interview.report_status = ReportStatus.failed
+            db.commit()
+        else:
+            # 이미 다른 경로(태스크 자신, 또는 이전 감시 주기)가 상태를 바꿔놓은
+            # 경우 — 워커가 늦게 살아나 정상 완료했을 수도 있으므로 덮어쓰지 않는다.
+            logger.info(
+                "리포트 job 유실 감시 — report_status가 이미 queued가 아니라 전이 생략: "
+                "interview_id=%s job_id=%s status=%s",
+                interview_id,
+                job_id,
+                interview.report_status,
+            )
+    except Exception:  # noqa: BLE001 — 감시 루프 자체를 죽이지 않음
+        logger.exception("리포트 job 유실 처리 중 DB 갱신 실패: interview_id=%s job_id=%s", interview_id, job_id)
+    finally:
+        db.close()
 
 
 async def _check_job(client: aioredis.Redis, key: bytes | str) -> None:
@@ -133,6 +187,10 @@ async def _check_job(client: aioredis.Redis, key: bytes | str) -> None:
                 "message": "AI 응답 처리가 중단되어 완료되지 못했습니다. 다시 시도해 주세요.",
             },
         )
+        if data.get("job_type") == "report":
+            # DEC-082/DEF-002: 리포트 화면은 WS가 아니라 폴링만 쓰므로(report/page.tsx)
+            # 위 WS 이벤트만으로는 화면이 절대 복구되지 않는다 — DB 상태 자체를 바꿔야 한다.
+            _mark_report_failed(data["interview_id"], job_id)
         await client.delete(key_str)
 
 

@@ -77,7 +77,7 @@ def enqueue_report_generation_job(interview_id: uuid.UUID) -> str:
         "app.worker.tasks.process_report_generation_job",
         args=[str(interview_id)],
     )
-    register_job(interview_id, result.id, timeout_seconds=_report_watch_timeout())
+    register_job(interview_id, result.id, timeout_seconds=_report_watch_timeout(), job_type="report")
     return result.id
 
 

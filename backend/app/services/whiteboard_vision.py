@@ -39,7 +39,16 @@ from PIL import Image, ImageDraw
 
 logger = logging.getLogger(__name__)
 
-_CANVAS_SIZE = (1200, 800)  # 04-ux-design 캔버스 좌표계 기준(스트로크 좌표가 이 범위라고 가정)
+# unit-35-note.md §5-1 후속 확인 필요 항목(2026-09-28 실측 대조 완료): 04-ux-design
+# 캔버스 좌표계를 가정해 (1200,800)으로 뒀었으나, 실제로 서비스에 배선된 값은
+# frontend/app/interviews/[id]/components/InterviewSidePanel.tsx:85가
+# WhiteboardCanvas를 width/height props 없이 호출해 컴포넌트 기본값(WhiteboardCanvas.tsx
+# 의 `width=640, height=400`)을 그대로 쓰고 있었다 — 종횡비까지 다름(8:5 vs 3:2).
+# 이 어긋남으로 스트로크가 실제 그려진 640×400 영역만 채우고 나머지 큰 여백은
+# 빈 캔버스로 렌더링돼 SmolVLM에 전달되고 있었다(이미 낮은 응답 품질을 더 악화시킴).
+# 좌표는 저장 시점이 아니라 분석 요청 시점에 렌더링하므로 기존 저장 데이터의
+# 마이그레이션은 불필요 — 상수만 프론트 실제값에 맞춘다.
+_CANVAS_SIZE = (640, 400)
 _BACKGROUND = "white"
 
 
