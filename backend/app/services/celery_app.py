@@ -8,8 +8,15 @@
 쓰면 깨질 위험이 있음). 이 프로젝트는 Vulkan 백엔드(llm_engine.py)를 쓰지만 동일한
 원칙을 그대로 적용한다 — 워커가 여러 개(또는 prefork로 여러 자식 프로세스) 뜨면
 `llama-server` 서브프로세스가 포트(8091)/VRAM을 두고 서로 충돌한다.
+
+**Celery beat 스케줄(2026-09-28, DEC-092, `app/worker/deletion_tasks.py`)**:
+`delete_requested_data`/`purge_expired_data`는 위 AI 워커와 **별도의 프로세스**인
+`celery -A app.services.celery_app beat`가 떠 있어야 실제로 주기 실행된다(beat는
+스케줄만 트리거하고, 실제 태스크는 여전히 `-Q ai_pipeline` 워커가 소비 — 같은 큐를
+공유해 GPU 워커와 리소스 경합 없음, 두 배치 모두 DB만 다룸).
 """
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -36,7 +43,7 @@ celery_app = Celery(
     "ai_interview_worker",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.worker.tasks"],
+    include=["app.worker.tasks", "app.worker.deletion_tasks"],
 )
 
 celery_app.conf.update(
@@ -44,4 +51,16 @@ celery_app.conf.update(
     task_track_started=True,
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
+    beat_schedule={
+        # REQ-030, 03-design §6.2: "매 시간 실행해 24시간 SLA에 충분한 여유를 둔다"
+        "delete-requested-data-hourly": {
+            "task": "app.worker.deletion_tasks.delete_requested_data",
+            "schedule": crontab(minute=0),
+        },
+        # REQ-033, 03-design §6.2: "purge_expired_data 배치(Celery beat, 매일 1회)"
+        "purge-expired-data-daily": {
+            "task": "app.worker.deletion_tasks.purge_expired_data",
+            "schedule": crontab(hour=3, minute=0),
+        },
+    },
 )

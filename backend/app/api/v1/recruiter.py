@@ -169,6 +169,24 @@ def list_rubric_templates(
     return [_rubric_template_to_out(t) for t in templates]
 
 
+def _validate_criteria_weight_sum(criteria: list) -> None:
+    """REQ-014 잔여 부채(2026-09-28) 정산: unit-13-note.md가 "weight 합계 검증 로직
+    부재"로 명시해뒀던 항목. `RubricCriterionIn.weight`는 개별 항목별로는 0~100
+    범위 검증이 있었지만, 항목 전체 합계가 100인지는 검사한 적이 없어 채용담당자가
+    실수로 합계 120·70짜리 템플릿을 만들어도 그대로 저장됐다(실제 채점 시
+    `_weighted_overall_score`의 가중평균 계산이 왜곡되는 원인). 합계가 100이
+    아니면 스키마 검증과 동일한 422로 거부한다.
+    """
+    total = sum(c.weight for c in criteria)
+    if total != 100:
+        raise AppError(
+            422,
+            "VALIDATION_ERROR",
+            "Validation Error",
+            f"평가 기준(criteria) 가중치(weight) 합계는 100이어야 합니다 (현재 합계: {total}).",
+        )
+
+
 @router.post("/rubric-templates", response_model=RubricTemplateOut, status_code=201)
 def create_rubric_template(
     payload: RubricTemplateCreateIn,
@@ -182,6 +200,7 @@ def create_rubric_template(
     하나로 처리한다(03-design에 별도 "복제" 엔드포인트가 정의되어 있지 않음).
     """
     _require_recruiter(current_user)
+    _validate_criteria_weight_sum(payload.criteria)
 
     template = RubricTemplate(
         recruiter_id=current_user.id,
@@ -223,6 +242,7 @@ def update_rubric_template(
     if payload.name is not None:
         template.name = payload.name
     if payload.criteria is not None:
+        _validate_criteria_weight_sum(payload.criteria)
         template.criteria_json = [c.model_dump() for c in payload.criteria]
 
     db.commit()
