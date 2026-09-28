@@ -78,12 +78,14 @@ from app.schemas.interview import (
     StarOut,
 )
 from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
+from app.services.interview_prompts import contains_persona_leak_marker
 from app.services.job_queue import enqueue_opening_question_job, enqueue_report_generation_job, enqueue_turn_job
 from app.services.prompt_safety import (
     RateLimitExceeded,
     check_and_increment_preview_rate_limit,
     check_and_increment_turn_rate_limit,
     log_injection_attempt,
+    log_persona_leak_detected,
 )
 from app.services.prosody_engine import ProsodyAnalysisError, analyze_prosody
 from app.services.rubric_defaults import SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID
@@ -354,8 +356,26 @@ def _build_rubric_out(report: EvaluationReport, db: Session) -> RubricOut | None
     )
 
 
+# unit-10-test.md DEF-003(2026-09-23): 파싱 실패 폴백 경로(§4.4)가 LLM 원문을
+# `summary_text`에 그대로 저장하는데, 턴 응답(`validate_followup_speak_text`)과
+# 달리 이 경로에는 REQ-039(시스템 프롬프트 유출 검사)가 적용돼 있지 않았다.
+# 2026-09-28 수정: DB의 `summary_text` 원문은 감사·디버깅용으로 그대로 두고
+# (마이그레이션 불필요), 사용자에게 실제로 내려주는 시점(이 함수, 지원자·
+# 채용담당자 두 화면이 모두 거치는 유일한 직렬화 지점)에서만 기존 REQ-039
+# 탐지 로직(`contains_persona_leak_marker`)을 재적용해 유출 의심 원문을
+# 안내 문구로 치환한다.
+_REPORT_SUMMARY_FALLBACK_NOTICE = (
+    "AI가 이 면접의 총평을 정리된 형식으로 생성하지 못했습니다. "
+    "점수·STAR 요약 대신 안내 문구를 표시합니다 — 필요 시 리포트를 다시 생성해 주세요."
+)
+
+
 def _report_to_out(interview: Interview, report: EvaluationReport | None, db: Session) -> ReportOut:
     star = StarOut(**report.star_json) if report is not None and report.star_json else None
+    summary_text = report.summary_text if report else None
+    if summary_text and contains_persona_leak_marker(summary_text):
+        log_persona_leak_detected(str(interview.id), summary_text)
+        summary_text = _REPORT_SUMMARY_FALLBACK_NOTICE
     return ReportOut(
         interview_id=interview.id,
         report_status=interview.report_status.value,
@@ -370,7 +390,7 @@ def _report_to_out(interview: Interview, report: EvaluationReport | None, db: Se
         if report and report.pass_fail_recommendation
         else None,
         star=star,
-        summary_text=report.summary_text if report else None,
+        summary_text=summary_text,
         details=report.details_json if report else None,
         rubric=_build_rubric_out(report, db) if report is not None else None,
     )
