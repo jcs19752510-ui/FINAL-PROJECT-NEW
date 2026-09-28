@@ -13,16 +13,22 @@
 유닛이 §6.3 화이트리스트 새니타이즈를 반드시 적용해야 한다는 점을 unit-9-note.md에 남긴다.
 
 REQ-008은 "실행 없음"(DEC-008, Out-of-Scope)이 확정되어 있으므로 이 테이블/모델은
-순수 저장소이며 코드 실행과 관련된 어떤 필드/로직도 갖지 않는다.
+순수 저장소이며 코드 실행과 관련된 어떤 필드/로직도 갖지 않는다(2026-09-24,
+DEC-069가 실제 실행 엔드포인트를 추가했으나 그 결과는 이 테이블에 저장하지
+않는다는 원칙은 그대로 유지 — `code_submissions.py` API 파일 참고).
+
+`content` 암호화(2026-09-28, DEC-078): 지원자가 제출한 코드 원문도 민감한
+데이터로 보고 `EncryptedText`(AES-256-GCM)로 저장 시 투명 암호화한다.
 """
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.services.field_encryption import EncryptedText
 
 
 class CodeSubmission(Base):
@@ -33,5 +39,5 @@ class CodeSubmission(Base):
         UUID(as_uuid=True), ForeignKey("interviews.id"), nullable=False, index=True
     )
     language: Mapped[str] = mapped_column(String(32), nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(EncryptedText, nullable=False)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

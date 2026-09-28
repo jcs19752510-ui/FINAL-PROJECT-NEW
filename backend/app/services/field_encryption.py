@@ -12,6 +12,14 @@
 docs/harness/decisions.md DEC-051, unit-25-note.md 정정 주석 참고. 암호화
 범위 확대는 후속 유닛으로 별도 진행.
 
+[2026-09-28 확대, DEC-078] 위 정정에 따라 오탐 사유가 사라져 `TRANSCRIPTS.
+content_text`·`code_submissions.content`(둘 다 `Text` 컬럼, 신규 `EncryptedText`
+사용)를 암호화 범위에 추가했다. `evaluation_reports.star_json`/`details_json`/
+`criteria_scores_json`(JSONB)은 이번 범위에서 **의도적으로 제외** —
+JSONB→Text 전환이 필요해 DB 레벨 JSON 조회 능력을 잃는 별도의 아키텍처
+결정이라 임의로 포함하지 않고 사용자 확인 후 별도 진행하기로 함(docs/harness/
+decisions.md DEC-078 참고).
+
 **알고리즘**: AES-256-GCM(`cryptography.hazmat.primitives.ciphers.aead.AESGCM`,
 32바이트 키 — 문자 그대로 "AES-256"). GCM은 인증 태그를 포함해 변조도 함께
 탐지한다(단순 CBC보다 안전한 기본 선택, 구현 세부값이나 되돌리기 쉬움).
@@ -26,7 +34,7 @@ import base64
 import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import String
+from sqlalchemy import String, Text
 from sqlalchemy.types import TypeDecorator
 
 _NONCE_BYTES = 12  # AESGCM 표준 논스 길이
@@ -94,3 +102,14 @@ class EncryptedString(TypeDecorator):
         if value is None:
             return None
         return decrypt_field(value)
+
+
+class EncryptedText(EncryptedString):
+    """`EncryptedString`과 완전히 동일한 로직이나 길이 제한 없는 `Text` 컬럼에
+    쓴다(2026-09-28, DEC-078 — content_text 등 암호화 범위 확대). 대화 전체
+    기록·코드 제출처럼 원문 길이가 가변적이고 클 수 있는 컬럼은 `String(N)`으로
+    상한을 정하면 암호화 오버헤드(§ 위 클래스 설명)까지 감안한 길이를 미리
+    가늠해야 해 위험하다 — `Text`는 그 걱정이 없다.
+    """
+
+    impl = Text
