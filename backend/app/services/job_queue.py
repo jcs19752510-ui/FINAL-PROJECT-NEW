@@ -36,17 +36,36 @@ from app.services.job_watchdog import _report_watch_timeout, register_job
 MAX_QUEUE_LENGTH = 50
 _QUEUE_KEY = "ai_pipeline"
 
+# 2026-09-28(DEC-096, QUEUE_FULL을 `/turns`에 확장하며 발견): 매 호출마다
+# `redis.Redis.from_url()`로 새 연결을 만들면(원래 코드), 이 서버 프로세스(uvicorn,
+# Windows) 안에서 실측 약 2초가 걸림 — 독립 스크립트로 같은 함수를 호출하면 6ms대라
+# "REDIS_URL이 느리다"가 아니라 "이 이벤트루프 안에서 매번 새 TCP+AUTH 핸드셰이크를
+# 하는 것 자체가 느리다"는 뜻이었다. `app/services/prompt_safety.py::_get_redis()`가
+# 이미 쓰고 있는 것과 동일한 "지연 생성 + 캐시" 패턴으로 바꿔 이 문제를 근본 해결한다
+# (연결 1번만 맺고 재사용, 이후 호출은 이미 열린 소켓에 LLEN 커맨드만 보냄).
+_queue_redis_client: "redis.Redis | None" = None
+
+
+def _get_queue_redis() -> "redis.Redis":
+    global _queue_redis_client
+    if _queue_redis_client is None:
+        _queue_redis_client = redis.Redis.from_url(settings.redis_url)
+    return _queue_redis_client
+
 
 def queue_length() -> int:
     """v15(unit-37, §4.6 (2) "남용 제한") — `ai_pipeline` 큐의 현재 대기 길이를 잰다.
     Redis 순간 오류는 호출부가 "확인 불가 → 진행 허용"으로 처리할 수 있도록
-    예외를 그대로 전파한다(과도하게 막지 않는 편을 택함).
+    예외를 그대로 전파한다(과도하게 막지 않는 편을 택함). 연결 오류 시에는 캐시된
+    클라이언트를 버려 다음 호출이 새로 연결을 시도하게 한다(끊긴 연결을 계속
+    재사용해 매번 실패하는 것을 방지).
     """
-    client = redis.Redis.from_url(settings.redis_url)
+    global _queue_redis_client
     try:
-        return client.llen(_QUEUE_KEY)
-    finally:
-        client.close()
+        return _get_queue_redis().llen(_QUEUE_KEY)
+    except redis.RedisError:
+        _queue_redis_client = None
+        raise
 
 
 def enqueue_opening_question_job(interview_id: uuid.UUID) -> str:

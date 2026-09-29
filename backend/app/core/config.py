@@ -14,7 +14,14 @@ class Settings(BaseSettings):
     # unit-7(REQ-007): Celery 브로커/백엔드 + WS push용 Redis pub/sub (03-design §1.3/§2.1).
     # unit-7 재작업(DEF-011/DEC-035 Q2): docker-compose.yml의 `--requirepass`와 짝을
     # 맞춰 기본값에도 인증정보를 포함한다(로컬 개발 전용 placeholder, 위 파일 주석 참고).
-    redis_url: str = "redis://:final_redis_pw@localhost:6389/0"
+    # 2026-09-28(DEC-096, QUEUE_FULL 작업 중 발견): 호스트명 `localhost`는 이 Windows
+    # 환경에서 IPv6(`::1`)를 먼저 시도했다가 실패 후 IPv4로 폴백하는 데 매 연결마다
+    # 약 2초가 걸림을 실측으로 확인(`redis.Redis.from_url()`로 새 연결을 만들 때마다
+    # 재현 — `queue_length()`가 매 호출 새 연결을 쓰기 때문에 체감됨). `127.0.0.1`로
+    # 고정하면 동일 연결이 6ms대로 단축됨(같은 로컬 머신이라 의미상 동일, 폴백 지연만
+    # 제거). Docker 컨테이너 간 통신이 아니라 호스트에서 직접 Redis(6389)에 붙는
+    # 구조라 이 변경으로 실제 대상이 바뀌지 않는다.
+    redis_url: str = "redis://:final_redis_pw@127.0.0.1:6389/0"
     # 운영(Nginx TLS 종단, 03-system-design.md §6.4)에서는 반드시 True.
     # 로컬 개발 서버가 http인 동안은 브라우저가 Secure 쿠키를 저장하지 않으므로 False로 둔다.
     cookie_secure: bool = True

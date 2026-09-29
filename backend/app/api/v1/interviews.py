@@ -79,7 +79,13 @@ from app.schemas.interview import (
 )
 from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
 from app.services.interview_prompts import contains_persona_leak_marker
-from app.services.job_queue import enqueue_opening_question_job, enqueue_report_generation_job, enqueue_turn_job
+from app.services.job_queue import (
+    MAX_QUEUE_LENGTH,
+    enqueue_opening_question_job,
+    enqueue_report_generation_job,
+    enqueue_turn_job,
+    queue_length,
+)
 from app.services.prompt_safety import (
     RateLimitExceeded,
     check_and_increment_preview_rate_limit,
@@ -549,6 +555,34 @@ def _ensure_turn_submittable(interview: Interview, db: Session) -> Interview:
     return interview
 
 
+def _ensure_queue_not_full() -> None:
+    """03-design §1.3/§4.1(원 설계, 표준 에러코드 `QUEUE_FULL`(429)) 정산(2026-09-28,
+    DEC-096) — `job_queue.py` 모듈 docstring이 "턴/종료 경로에는 아직 없다, 09단계
+    인계 대상"으로 명시해뒀던 바로 그 검사를 이번에 `/turns`(텍스트·음성 공통)에
+    추가한다. GPU 큐(`ai_pipeline`)가 이미 최대 길이(50) 이상 차 있으면, 사용자
+    답변을 저장하거나(텍스트) 무거운 STT 작업을 시작하기(음성) 전에 즉시 429로
+    거절한다 — 뒤에서 조용히 몇 분씩 기다리게 하지 않고 "지금은 안 됩니다"를
+    바로 알려주기 위함(§1.3 원문 의도 그대로).
+
+    `recruiter.py` 재채점 엔드포인트(§4.6 (2), DEC-055)는 같은 `queue_length()`를
+    쓰지만 503을 반환한다 — 그건 그 경로만의 별도 결정(남용 방지 목적)이고, 이
+    함수는 §1.3/§4.1 원 설계 표가 명시한 429를 그대로 따른다(엔드포인트별로 다른
+    의미의 "찼다" 응답이라 통일하지 않음, 각자 자기 설계 근거를 따름).
+    """
+    try:
+        if queue_length() >= MAX_QUEUE_LENGTH:
+            raise AppError(
+                429,
+                "QUEUE_FULL",
+                "Too Many Requests",
+                "지금 처리 대기 중인 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+            )
+    except AppError:
+        raise
+    except Exception:  # noqa: BLE001 — Redis 순간 오류는 "확인 불가 → 허용"(job_queue.py queue_length 원칙과 동일)
+        pass
+
+
 def _submit_text_turn(interview: Interview, payload: TurnCreate, db: Session) -> TurnAcceptedResponse:
     """REQ-003: 텍스트 턴 제출 (03-design §4.2/§4.3).
 
@@ -568,6 +602,7 @@ def _submit_text_turn(interview: Interview, payload: TurnCreate, db: Session) ->
         check_and_increment_turn_rate_limit(str(interview.candidate_id))
     except RateLimitExceeded as exc:
         raise AppError(429, "RATE_LIMIT_EXCEEDED", "Too Many Requests", str(exc)) from exc
+    _ensure_queue_not_full()
     log_injection_attempt(str(interview.candidate_id), str(interview.id), payload.text)
 
     transcript = insert_transcript_with_retry(
@@ -618,6 +653,7 @@ async def _submit_voice_turn(
         check_and_increment_turn_rate_limit(str(current_user.id))
     except RateLimitExceeded as exc:
         raise AppError(429, "RATE_LIMIT_EXCEEDED", "Too Many Requests", str(exc)) from exc
+    _ensure_queue_not_full()
 
     try:
         form = await request.form()

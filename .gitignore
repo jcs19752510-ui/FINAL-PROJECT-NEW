@@ -31,6 +31,8 @@ backend/**/__pycache__/
 backend/var/
 # unit-22(DEC-030): pytest 캐시
 backend/.pytest_cache/
+# unit-21(DEC-093): Celery beat 로컬 스케줄 상태 파일(실행 시 backend/에 자동 생성)
+backend/celerybeat-schedule*
 
 # 프론트엔드
 frontend/node_modules/
