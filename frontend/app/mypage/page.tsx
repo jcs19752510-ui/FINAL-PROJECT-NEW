@@ -31,6 +31,9 @@ import styles from "./mypage.module.css";
 const CONSENT_LABELS: Record<ConsentType, string> = {
   ai_interview_notice: "AI 면접 진행/평가 사전고지",
   biometric_voice: "생체정보(음성) 수집",
+  // Feature J(2026-09-29): 이력서 제출 동의도 기존 마이페이지 동의 이력에
+  // additive하게 노출된다(별도 화면 신설 없이 기존 목록 재사용).
+  resume_submission: "이력서(채용 지원 서류) 제출",
 };
 
 function formatDateTime(iso: string | null): string {

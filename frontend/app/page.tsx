@@ -54,9 +54,14 @@ export default function HomePage() {
             역할: {roleLabel} ({user.email})
           </p>
           {user.role === "recruiter" && (
-            <p>
-              <Link href="/recruiter">지원자 리포트 목록으로 이동</Link>
-            </p>
+            <>
+              <p>
+                <Link href="/recruiter">지원자 리포트 목록으로 이동</Link>
+              </p>
+              <p>
+                <Link href="/recruiter/resumes">이력서 검토 목록으로 이동</Link>
+              </p>
+            </>
           )}
           <button type="button" className="submit-button" onClick={handleLogout}>
             로그아웃

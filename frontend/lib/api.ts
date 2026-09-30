@@ -411,7 +411,7 @@ export function endInterview(accessToken: string, interviewId: string): Promise<
 // REQ-029~034(unit-15, Feature G): backend/app/api/v1/consents.py(unit-14)를 그대로
 // 소비한다 — 이 파일은 절대 수정하지 않는다. 필드명은 backend/app/schemas/consent.py와
 // 1:1 대응.
-export type ConsentType = "ai_interview_notice" | "biometric_voice";
+export type ConsentType = "ai_interview_notice" | "biometric_voice" | "resume_submission";
 
 export interface ConsentOut {
   id: string;
@@ -579,6 +579,128 @@ export interface RubricTemplateAssignOut {
   interview_id: string;
   rubric_template_id: string;
   job_id: string | null;
+}
+
+// Feature J(REQ-040~044, 2026-09-29 사용자 요청) — 이력서제출_합격통보_신규기능_
+// 요청프롬프트.md §4-4. `/apply/*`(지원자 포털)와 `/recruiter/resumes/*`(관리자
+// 검토 화면)가 공용으로 쓴다.
+export type ResumeApplicationStatus = "pending" | "accepted" | "rejected";
+
+export interface MyResumeStatusOut {
+  id: string;
+  status: ResumeApplicationStatus;
+  original_filename: string;
+  decision_note: string | null;
+  interview_schedule_note: string | null;
+  submitted_at: string;
+  reviewed_at: string | null;
+}
+
+// 응답이 없으면(지원서 기록 자체가 없음) `null` — 하위호환 게이트 정책
+// (요청 프롬프트 §4-5, 2026-09-29 사용자 확인)이 이 값을 그대로 쓴다.
+export function getMyResumeStatus(accessToken: string): Promise<MyResumeStatusOut | null> {
+  return request<MyResumeStatusOut | null>("/users/me/resume-status", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// `request()` 공통 헬퍼는 Content-Type을 강제 JSON으로 부착하므로(line 19),
+// multipart 업로드는 submitVoiceTurn과 동일하게 fetch를 직접 호출한다.
+export async function submitResume(accessToken: string, file: File): Promise<MyResumeStatusOut> {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+
+  const res = await fetch(`${API_BASE_URL}/resumes`, {
+    method: "POST",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, body?.code ?? "UNKNOWN_ERROR", body?.detail ?? "요청 처리 중 오류가 발생했습니다.");
+  }
+  return res.json() as Promise<MyResumeStatusOut>;
+}
+
+export interface RecruiterResumeListItemOut {
+  id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_email: string;
+  status: ResumeApplicationStatus;
+  original_filename: string;
+  submitted_at: string;
+  reviewed_at: string | null;
+  notified_at: string | null;
+}
+
+export interface RecruiterResumeDetailOut extends RecruiterResumeListItemOut {
+  content_type: string;
+  file_size_bytes: number;
+  decision_note: string | null;
+  interview_schedule_note: string | null;
+}
+
+export function listRecruiterResumes(accessToken: string): Promise<RecruiterResumeListItemOut[]> {
+  return request<RecruiterResumeListItemOut[]>("/recruiter/resumes", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function getRecruiterResumeDetail(accessToken: string, applicationId: string): Promise<RecruiterResumeDetailOut> {
+  return request<RecruiterResumeDetailOut>(`/recruiter/resumes/${applicationId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// 2026-09-29(실브라우저 재검증 중 발견·수정): 이 엔드포인트는 인증(Authorization
+// 헤더)이 필요한데, 일반 `<a href>` 클릭/새 탭 열기는 커스텀 헤더를 붙이지
+// 않는다(브라우저가 쿠키만 자동으로 보냄, 이 앱은 쿠키가 아니라 Bearer 토큰을
+// 씀) — 그래서 링크로 만들면 실제 화면에서는 401이 난다(실측으로 확인). fetch로
+// 인증 헤더를 직접 붙여 Blob을 받아온 뒤 object URL로 열어야 한다.
+export async function downloadResumeFile(accessToken: string, applicationId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/recruiter/resumes/${applicationId}/file`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, body?.code ?? "UNKNOWN_ERROR", body?.detail ?? "파일을 불러오지 못했습니다.");
+  }
+  return res.blob();
+}
+
+export function decideResume(
+  accessToken: string,
+  applicationId: string,
+  input: { status: "accepted" | "rejected"; decision_note?: string; interview_schedule_note?: string },
+): Promise<RecruiterResumeDetailOut> {
+  return request<RecruiterResumeDetailOut>(`/recruiter/resumes/${applicationId}/decision`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export interface NotificationDraftOut {
+  to_email: string;
+  subject: string;
+  body: string;
+}
+
+export function getNotificationDraft(accessToken: string, applicationId: string): Promise<NotificationDraftOut> {
+  return request<NotificationDraftOut>(`/recruiter/resumes/${applicationId}/notification-draft`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function markResumeNotified(accessToken: string, applicationId: string): Promise<RecruiterResumeDetailOut> {
+  return request<RecruiterResumeDetailOut>(`/recruiter/resumes/${applicationId}/mark-notified`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
 }
 
 export function assignRubricTemplate(

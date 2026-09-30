@@ -12,11 +12,23 @@ import { useEffect, useState } from "react";
 import {
   ApiError,
   type InterviewListItemOut,
+  type MyResumeStatusOut,
   type UserOut,
   clearAccessToken,
+  getMyResumeStatus,
   listMyInterviews,
 } from "@/lib/api";
 import styles from "./CandidateHome.module.css";
+
+// Feature J(2026-09-29 사용자 요청·확인): 이력서제출_합격통보_신규기능_요청프롬프트.md
+// §4-5 하위호환 정책 — `getMyResumeStatus`가 null(지원서 기록 자체가 없음)이면
+// 이 기능 도입 이전과 동일하게 게이트하지 않는다. 기록이 있는데 accepted가
+// 아니면(pending/rejected)만 "새 면접 시작"을 막는다.
+const RESUME_STATUS_LABEL: Record<MyResumeStatusOut["status"], string> = {
+  pending: "이력서 심사 중입니다. 서류 합격 후 모의면접을 시작할 수 있어요.",
+  accepted: "",
+  rejected: "이번 전형에서는 서류 합격하지 못했습니다.",
+};
 
 // 설계서 미명시 표시 정책(비가역성 낮음): 홈은 "최근 면접"이므로 최근 N건만 그린다.
 // 중단 세션 배너는 전체 응답에서 판단하므로 이 제한의 영향을 받지 않는다.
@@ -67,6 +79,25 @@ interface Props {
 export default function CandidateHome({ user, accessToken, onLogout, onSessionExpired }: Props) {
   const [state, setState] = useState<ListState>({ kind: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
+  // 조회 실패는 하위호환 정책과 동일하게 취급한다(기록 없음으로 간주, 게이트하지 않음) —
+  // 신규 조회 엔드포인트 하나의 실패가 기존 핵심 기능(면접 시작)을 막으면 안 된다.
+  const [resumeStatus, setResumeStatus] = useState<MyResumeStatusOut | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getMyResumeStatus(accessToken)
+      .then((s) => {
+        if (!cancelled) setResumeStatus(s);
+      })
+      .catch(() => {
+        if (!cancelled) setResumeStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
+
+  const resumeGateActive = resumeStatus !== null && resumeStatus.status !== "accepted";
 
   useEffect(() => {
     let cancelled = false;
@@ -113,9 +144,17 @@ export default function CandidateHome({ user, accessToken, onLogout, onSessionEx
         <h2 id="home-start-heading" className={styles.srOnly}>
           새 면접
         </h2>
-        <Link href="/interviews/new" className={`submit-button ${styles.cta} ${isEmpty ? styles.ctaEmphasis : ""}`}>
-          새 면접 시작
-        </Link>
+        {resumeGateActive ? (
+          <div role="status" className={styles.resumeBanner}>
+            <div>
+              <strong>{RESUME_STATUS_LABEL[resumeStatus!.status]}</strong>
+            </div>
+          </div>
+        ) : (
+          <Link href="/interviews/new" className={`submit-button ${styles.cta} ${isEmpty ? styles.ctaEmphasis : ""}`}>
+            새 면접 시작
+          </Link>
+        )}
       </section>
 
       {resumables.length > 0 && (

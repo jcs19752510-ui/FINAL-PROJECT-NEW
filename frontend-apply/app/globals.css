@@ -1,0 +1,140 @@
+/* frontend/app/globals.css(모의면접 앱)와 동일한 디자인 토큰·인증 화면 스타일만
+   가져왔다 — 이 앱(채용 지원 포털)은 회원가입/로그인/이력서 제출 화면만
+   가지므로 interview-room/ops 등 무관한 스타일은 옮기지 않는다(2026-09-29,
+   사용자 지시로 포트 3002 분리 — 코드 중복 최소화 원칙에 따라 필요한 부분만). */
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f7f8fa;
+  --color-border: #d8dce3;
+  --color-text-primary: #1a1d23;
+  --color-text-secondary: #545b66;
+  --color-primary-600: #2e5aac;
+  --color-primary-700: #24478a;
+  --color-primary-100: #e8eefa;
+  --color-danger-600: #c22a2a;
+  --color-danger-100: #fbe7e7;
+  --color-focus-ring: #1456d6;
+  --radius-md: 8px;
+  --radius-sm: 4px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+a {
+  color: var(--color-primary-600);
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 32px 24px;
+}
+
+.auth-card h1 {
+  font-size: 24px;
+  margin: 0 0 24px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field label {
+  display: block;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.field input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
+.field input:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.field-error {
+  color: var(--color-danger-600);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.submit-button {
+  width: 100%;
+  padding: 12px;
+  background: var(--color-primary-600);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.submit-button:hover {
+  background: var(--color-primary-700);
+}
+
+.submit-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.banner-error {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.auth-footer {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.home-link {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  margin-bottom: 12px;
+}
+
+.home-link:hover {
+  color: var(--color-primary-700);
+  text-decoration: underline;
+}

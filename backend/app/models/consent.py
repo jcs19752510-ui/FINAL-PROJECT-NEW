@@ -32,6 +32,10 @@ from app.services.field_encryption import EncryptedString
 class ConsentType(StrEnum):
     biometric_voice = "biometric_voice"
     ai_interview_notice = "ai_interview_notice"
+    # Feature J(REQ-040, 2026-09-29 사용자 요청) — 이력서(채용 지원 서류) 제출 전
+    # 사전고지+동의. 기존 unit-14/15가 확립한 "새 개인정보 수집은 반드시 신규
+    # ConsentType으로 사전 동의를 받는다" 패턴을 그대로 따른다(임의 생략 금지).
+    resume_submission = "resume_submission"
 
 
 class LawfulBasis(StrEnum):
