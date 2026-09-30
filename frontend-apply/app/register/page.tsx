@@ -122,14 +122,15 @@ export default function ApplyRegisterPage() {
           </p>
 
           <div className="field">
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
               <input
                 type="checkbox"
                 checked={agreedToPolicy}
                 onChange={(e) => setAgreedToPolicy(e.target.checked)}
                 required
+                style={{ marginTop: 3 }}
               />
-              <span>개인정보 처리방침에 동의합니다.</span>
+              <span style={{ fontSize: 13.5, lineHeight: 1.5 }}>개인정보 처리방침에 동의합니다.</span>
             </label>
           </div>
 

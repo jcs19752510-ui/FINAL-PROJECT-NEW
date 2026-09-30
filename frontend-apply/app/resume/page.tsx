@@ -3,9 +3,15 @@
 /**
  * [Feature J] 이력서 제출/상태 확인 — 이력서제출_합격통보_신규기능_요청프롬프트.md
  * §4-1. 로그인한 candidate가 PDF 이력서를 제출하고, 제출 후에는 현재 심사
- * 상태(pending/accepted/rejected)를 확인한다. 재제출은 언제든 가능하며
- * (백엔드가 상태를 pending으로 되돌림), 이 화면은 그 정책을 그대로 반영해
- * 재업로드 폼을 항상 노출한다.
+ * 상태(pending/accepted/rejected)를 확인한다.
+ *
+ * 2026-09-30(사용자 지시, DEC-118): 예전에는 재제출이 언제든 가능했으나(백엔드가
+ * 상태를 pending으로 되돌리는 정책), 이제는 1번이라도 제출했으면(상태 무관)
+ * 재제출 자체를 막는다 — 샘플 양식 다운로드/파일 선택/동의 체크박스/제출
+ * 버튼을 전부 숨기고 상태 확인만 가능하다. 화면만 막으면 API를 직접 호출해
+ * 우회할 수 있어(개발자도구 등) 백엔드(`POST /resumes`)도 이미 지원서가
+ * 있으면 409로 거부하도록 함께 막았다 — 화면 차단은 UX일 뿐, 실제 방어는
+ * 백엔드에 있다.
  */
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -21,6 +27,7 @@ import {
   submitResume,
 } from "@/lib/api";
 import HomeLink from "@/components/HomeLink";
+import ApplyTabs from "@/components/ApplyTabs";
 
 const STATUS_LABEL: Record<MyResumeStatusOut["status"], string> = {
   pending: "심사 중",
@@ -123,6 +130,7 @@ export default function ApplyResumePage() {
     <div className="auth-page">
       <div className="auth-card" style={{ maxWidth: 480 }}>
         <HomeLink />
+        <ApplyTabs />
         <h1>이력서 제출</h1>
         <p style={{ color: "var(--color-text-secondary)", marginBottom: 20 }}>{user.name}님, 안녕하세요.</p>
 
@@ -160,43 +168,57 @@ export default function ApplyResumePage() {
 
         {error && <div className="banner-error">{error}</div>}
 
-        <div
-          className="field"
-          style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}
-        >
-          <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--color-text-secondary)" }}>
-            이력서를 어떻게 써야 할지 모르겠다면? 샘플 양식(PDF)을 내려받아 참고해보세요.
+        {status === "loading" ? null : status === null ? (
+          <>
+            <div
+              className="field"
+              style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}
+            >
+              <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--color-text-secondary)" }}>
+                이력서를 어떻게 써야 할지 모르겠다면? 샘플 양식(PDF)을 내려받아 참고해보세요.
+              </p>
+              <a href="/sample-resume.pdf" download="이력서_샘플_양식.pdf" className="submit-button" style={{ display: "inline-block", textAlign: "center", textDecoration: "none" }}>
+                이력서 샘플 양식 다운로드
+              </a>
+            </div>
+
+            <div className="field">
+              <label htmlFor="resume-file">이력서 제출(PDF)</label>
+              <input
+                id="resume-file"
+                type="file"
+                accept="application/pdf"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
+
+            <div className="field">
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={agreed}
+                  onChange={(e) => setAgreed(e.target.checked)}
+                  required
+                  style={{ marginTop: 3 }}
+                />
+                <span style={{ fontSize: 13.5, lineHeight: 1.5 }}>이력서에 있는 개인정보를 수집·이용하는 데 동의합니다.</span>
+              </label>
+            </div>
+
+            <button
+              type="button"
+              className="submit-button"
+              disabled={!file || !agreed || submitting}
+              onClick={handleSubmit}
+            >
+              {submitting ? "제출 중..." : "제출하기"}
+            </button>
+          </>
+        ) : (
+          <p style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
+            이력서는 한 번만 제출할 수 있어요. 위 상태만 확인해주세요.
           </p>
-          <a href="/sample-resume.pdf" download="이력서_샘플_양식.pdf" className="submit-button" style={{ display: "inline-block", textAlign: "center", textDecoration: "none" }}>
-            이력서 샘플 양식 다운로드
-          </a>
-        </div>
-
-        <div className="field">
-          <label htmlFor="resume-file">{status && status !== "loading" ? "이력서 다시 제출(PDF)" : "이력서 제출(PDF)"}</label>
-          <input
-            id="resume-file"
-            type="file"
-            accept="application/pdf"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          />
-        </div>
-
-        <div className="field">
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-            <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} required />
-            <span>이력서에 있는 개인정보를 수집·이용하는 데 동의합니다.</span>
-          </label>
-        </div>
-
-        <button
-          type="button"
-          className="submit-button"
-          disabled={!file || !agreed || submitting}
-          onClick={handleSubmit}
-        >
-          {submitting ? "제출 중..." : "제출하기"}
-        </button>
+        )}
       </div>
     </div>
   );

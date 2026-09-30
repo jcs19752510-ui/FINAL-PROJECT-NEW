@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     deepgram_api_key: str | None = None
     elevenlabs_api_key: str | None = None
     openai_api_key: str | None = None
+    # 2026-09-30(사용자 지시): 합격/불합격 결정 시 지원자 안내 메일을 백엔드가 완전
+    # 자동으로 발송한다(관리자가 직접 복사해 보내던 반자동 방식 대체). Gmail SMTP +
+    # 앱 비밀번호(일반 로그인 비밀번호 아님). 둘 다 없으면 자동발송을 건너뛰고
+    # 기존처럼 초안만 보여준다(가짜 진행률 금지 — 키 없이 "발송된 척" 하지 않음).
+    gmail_address: str | None = None
+    gmail_app_password: str | None = None
 
     @property
     def cors_origin_list(self) -> list[str]:

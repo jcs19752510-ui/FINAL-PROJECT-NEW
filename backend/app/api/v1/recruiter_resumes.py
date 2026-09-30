@@ -27,6 +27,7 @@ from app.schemas.resume import (
     RecruiterResumeListItemOut,
     ResumeDecisionIn,
 )
+from app.services.email_service import EmailSendError, email_configured, send_notification_email
 
 router = APIRouter(prefix="/recruiter", tags=["recruiter-resumes"])
 
@@ -34,6 +35,34 @@ router = APIRouter(prefix="/recruiter", tags=["recruiter-resumes"])
 # 위한 안내 문구용 링크. 실제 배포 도메인은 아직 없어(로컬 개발 단계) 상대
 # 경로로만 안내한다 — 운영 배포 시 절대 URL로 교체 필요(11단계 인수인계 대상).
 _MOCK_INTERVIEW_LOGIN_HINT = "모의면접 사이트에 이 계정(이메일/비밀번호)으로 로그인해주세요."
+
+
+def _build_notification_content(app_: ResumeApplication, candidate: User) -> tuple[str, str]:
+    """합격/불합격 안내 메일의 제목·본문을 만든다 — 초안 미리보기(`get_notification_draft`)와
+    자동 발송(`decide_resume`) 양쪽이 이 함수 하나를 공유한다(문구가 어긋나지 않도록)."""
+    if app_.status == ResumeApplicationStatus.accepted:
+        subject = "[채용 안내] 서류 전형 합격 및 모의면접 안내"
+        lines = [
+            f"{candidate.name}님, 안녕하세요.",
+            "",
+            "서류 전형에 합격하셨습니다. 축하드립니다.",
+        ]
+        if app_.interview_schedule_note:
+            lines += ["", f"면접 일정 안내: {app_.interview_schedule_note}"]
+        if app_.decision_note:
+            lines += ["", app_.decision_note]
+        lines += ["", _MOCK_INTERVIEW_LOGIN_HINT, "로그인 후 합격 여부를 다시 확인하실 수 있으며, 이어서 모의면접을 진행해주세요."]
+    else:
+        subject = "[채용 안내] 서류 전형 결과 안내"
+        lines = [
+            f"{candidate.name}님, 안녕하세요.",
+            "",
+            "아쉽게도 이번 서류 전형에서는 합격하지 못하셨습니다.",
+        ]
+        if app_.decision_note:
+            lines += ["", app_.decision_note]
+        lines += ["", "지원해주셔서 감사합니다."]
+    return subject, "\n".join(lines)
 
 
 def _get_application_or_404(db: Session, application_id: UUID) -> tuple[ResumeApplication, User]:
@@ -139,6 +168,21 @@ def decide_resume(
     db.commit()
     db.refresh(app_)
 
+    # 2026-09-30(사용자 지시): 판단 저장 직후 백엔드가 즉시 안내 메일을 자동 발송한다.
+    # 메일 설정이 없거나 발송이 실패해도 판단 저장 자체는 이미 끝난 뒤이므로 막지
+    # 않는다 — notified_at이 비어있으면 관리자가 기존처럼 초안을 보고 수동으로
+    # 보낸 뒤 "발송 완료로 표시"를 누르는 경로가 그대로 남아있다(가짜 진행률 금지:
+    # 실제로 보낸 게 확인된 경우에만 notified_at을 채운다).
+    if email_configured():
+        subject, body = _build_notification_content(app_, candidate)
+        try:
+            send_notification_email(candidate.email, subject, body)
+            app_.notified_at = datetime.now(UTC)
+            db.commit()
+            db.refresh(app_)
+        except EmailSendError:
+            pass  # send_notification_email이 이미 경고 로그를 남겼다.
+
     return RecruiterResumeDetailOut(
         id=app_.id,
         candidate_id=candidate.id,
@@ -162,39 +206,18 @@ def get_notification_draft(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> NotificationDraftOut:
-    """반자동 통보(요청 프롬프트 §2 결정#3) — 백엔드는 발송하지 않고, 관리자가
-    그대로 복사해 본인의 Claude+MCP 메일 도구로 보낼 수 있는 제목/본문만
-    생성한다."""
+    """§2 결정#3이 원래 정한 반자동(백엔드 미발송) 방식은 2026-09-30 사용자 지시로
+    `decide_resume`의 자동 발송으로 대체됐다 — 이 엔드포인트는 이제 "실제로 보낸/
+    보낼 내용을 다시 확인"하는 용도(자동 발송 실패 시 수동 발송용 참고 자료 포함)로
+    남는다."""
     _require_recruiter(current_user)
     app_, candidate = _get_application_or_404(db, application_id)
 
     if app_.status == ResumeApplicationStatus.pending:
         raise AppError(409, "VALIDATION_ERROR", "Conflict", "아직 판단(합격/불합격)이 저장되지 않았습니다.")
 
-    if app_.status == ResumeApplicationStatus.accepted:
-        subject = "[채용 안내] 서류 전형 합격 및 모의면접 안내"
-        lines = [
-            f"{candidate.name}님, 안녕하세요.",
-            "",
-            "서류 전형에 합격하셨습니다. 축하드립니다.",
-        ]
-        if app_.interview_schedule_note:
-            lines += ["", f"면접 일정 안내: {app_.interview_schedule_note}"]
-        if app_.decision_note:
-            lines += ["", app_.decision_note]
-        lines += ["", _MOCK_INTERVIEW_LOGIN_HINT, "로그인 후 합격 여부를 다시 확인하실 수 있으며, 이어서 모의면접을 진행해주세요."]
-    else:
-        subject = "[채용 안내] 서류 전형 결과 안내"
-        lines = [
-            f"{candidate.name}님, 안녕하세요.",
-            "",
-            "아쉽게도 이번 서류 전형에서는 합격하지 못하셨습니다.",
-        ]
-        if app_.decision_note:
-            lines += ["", app_.decision_note]
-        lines += ["", "지원해주셔서 감사합니다."]
-
-    return NotificationDraftOut(to_email=candidate.email, subject=subject, body="\n".join(lines))
+    subject, body = _build_notification_content(app_, candidate)
+    return NotificationDraftOut(to_email=candidate.email, subject=subject, body=body)
 
 
 @router.post("/resumes/{application_id}/mark-notified", response_model=RecruiterResumeDetailOut)

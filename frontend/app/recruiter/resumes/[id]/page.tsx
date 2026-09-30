@@ -1,11 +1,14 @@
 "use client";
 
 /**
- * [Feature J] 이력서 상세 + 합격/불합격 판단 + 통보 초안 — 이력서제출_합격통보_
- * 신규기능_요청프롬프트.md §4-2. 판단 저장 후에는 화면에서 바로 통보 초안
- * (제목/본문)을 불러와 관리자가 복사해 MCP 메일 도구로 직접 보낼 수 있게
- * 하고, 발송을 마치면 "통보 완료로 표시" 버튼으로 `notified_at`을 남긴다
- * (§2 결정#3 — 백엔드는 이메일을 자동 발송하지 않는다).
+ * [Feature J] 이력서 상세 + 합격/불합격 판단 + 통보 — 이력서제출_합격통보_
+ * 신규기능_요청프롬프트.md §4-2. 2026-09-30(사용자 지시)부터 판단 저장 직후
+ * 백엔드가 Gmail SMTP로 안내 메일을 즉시 자동 발송한다(§2 결정#3의 반자동
+ * 방식을 대체 — recruiter_resumes.py의 `decide_resume` 참고). 이 화면의
+ * "안내 내용 미리보기"는 실제 발송된(혹은 발송될) 내용을 다시 확인하는
+ * 용도이며, "발송 완료로 표시" 버튼은 자동 발송이 실패했을 때(메일 미설정,
+ * SMTP 오류 등)의 수동 대체 경로로만 남아있다 — `detail.notified_at`이 이미
+ * 채워져 있으면(자동 발송 성공) 이 버튼 대신 완료 시각만 보여준다.
  */
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -459,7 +462,9 @@ export default function RecruiterResumeDetailPage() {
         <section style={{ marginTop: 32 }}>
           <h2>합격/불합격 안내</h2>
           <p style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
-            아래 내용을 그대로 복사해서 이메일로 직접 보내주세요. 이 화면에서 자동으로 발송되지는 않아요.
+            {detail.notified_at
+              ? "판단 저장 시 시스템이 지원자에게 안내 메일을 자동으로 발송했습니다. 아래에서 발송된 내용을 다시 확인할 수 있어요."
+              : "자동 발송이 아직 되지 않았습니다(메일 설정 누락 또는 발송 실패). 아래 내용을 복사해서 직접 보내신 뒤 '발송 완료로 표시'를 눌러주세요."}
           </p>
           {draftError && <div className="banner-error">{draftError}</div>}
           {!draft ? (
