@@ -12,9 +12,21 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 from app.schemas.interview import RubricOut, StarOut
+
+
+# 2026-09-30(사용자 지시): 채용담당자(recruiter) 계정은 더 이상 공개 회원가입
+# (`POST /auth/register`)으로 만들 수 없다 — 그 엔드포인트는 role을 candidate로
+# 고정 제한했다(app/schemas/user.py::RegisterRequest). 이 스키마는 "이미 로그인한
+# 채용담당자만" 호출 가능한 신규 보호 엔드포인트(`POST /recruiter/recruiters`)
+# 전용이며, role 필드 자체가 없다 — 항상 recruiter로 고정 생성되므로 호출자가
+# 임의로 다른 role을 지정할 수 있는 여지를 아예 없앴다.
+class RecruiterCreateIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    name: str = Field(min_length=1, max_length=100)
 
 
 class RecruiterInterviewListItemOut(BaseModel):

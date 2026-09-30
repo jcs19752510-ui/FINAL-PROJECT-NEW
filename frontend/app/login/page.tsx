@@ -1,23 +1,12 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState, type FormEvent } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState, type FormEvent } from "react";
 import { ApiError, loginUser, storeAccessToken } from "@/lib/api";
 import HomeLink from "@/components/HomeLink";
 
 export default function LoginPage() {
-  return (
-    <Suspense fallback={null}>
-      <LoginForm />
-    </Suspense>
-  );
-}
-
-function LoginForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const justRegistered = searchParams.get("registered") === "1";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -51,11 +40,6 @@ function LoginForm() {
       <div className="auth-card">
         <HomeLink />
         <h1>로그인</h1>
-        {justRegistered && (
-          <div style={{ color: "var(--color-text-secondary)", fontSize: 13, marginBottom: 16 }}>
-            회원가입이 완료되었습니다. 로그인해주세요.
-          </div>
-        )}
         {error && <div className="banner-error">{error}</div>}
 
         <form onSubmit={handleSubmit} noValidate>
@@ -87,10 +71,6 @@ function LoginForm() {
             {submitting ? "로그인 중..." : "로그인"}
           </button>
         </form>
-
-        <div className="auth-footer">
-          계정이 없으신가요? <Link href="/register">회원가입</Link>
-        </div>
       </div>
     </div>
   );

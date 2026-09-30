@@ -70,10 +70,18 @@ export class AccountKit {
   async create(role: "candidate" | "recruiter", name = `u19 ${role}`): Promise<Account> {
     const email = `harness_test_${randomUUID()}@harness-test.example`;
     const password = `Pw-${randomBytes(12).toString("base64url")}`;
-    const reg = await this.request.post(`${API_BASE}/auth/register`, { data: { email, password, name, role } });
+    // 2026-09-30(DEC-107): 공개 /auth/register는 recruiter 자가가입 보안 구멍을 막느라
+    // 이제 candidate만 받는다. recruiter 테스트 계정은 candidate로 만든 뒤, 이 파일이
+    // admin 역할을 만들 때 이미 쓰던 것과 동일한 방식(raw SQL로 role만 전환)으로 만든다.
+    const reg = await this.request.post(`${API_BASE}/auth/register`, {
+      data: { email, password, name, role: "candidate" },
+    });
     if (reg.status() !== 201) throw new Error(`register 실패 ${reg.status()} ${await reg.text()}`);
     const user = (await reg.json()) as { id: string };
     this.ids.push(user.id);
+    if (role === "recruiter") {
+      sql(`update users set role='recruiter' where id='${assertUuid(user.id)}'`);
+    }
     const login = await this.request.post(`${API_BASE}/auth/login`, { data: { email, password } });
     if (login.status() !== 200) throw new Error(`login 실패 ${login.status()} ${await login.text()}`);
     const body = (await login.json()) as { access_token: string };

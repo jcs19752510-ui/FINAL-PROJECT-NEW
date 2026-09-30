@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { href: "/recruiter", label: "지원자 리포트" },
   { href: "/recruiter/resumes", label: "이력서 검토" },
+  { href: "/recruiter/add-recruiter", label: "채용담당자 추가" },
 ] as const;
 
 export default function RecruiterListTabs() {

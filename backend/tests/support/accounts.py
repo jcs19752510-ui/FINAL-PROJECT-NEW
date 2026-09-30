@@ -4,13 +4,16 @@
 DB 정리 헬퍼(`cleanup.py`)가 지울 수 있는 유일한 대상이므로, 테스트는 반드시 이 모듈로만
 계정을 만든다.
 """
+import os
 import re
 import secrets
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import httpx
+import psycopg
 
 API_V1 = "/api/v1"
 
@@ -54,17 +57,44 @@ def is_marker_email(email: str) -> bool:
     return MARKER_EMAIL_RE.fullmatch(email) is not None
 
 
+def _database_url() -> str:
+    """cleanup.py::_database_url()과 동일한 관례(순환 import를 피하려 로컬로 복제).
+    2026-09-30(DEC-107) 이후 recruiter 테스트 계정의 role 전환에만 쓴다."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        env_file = Path(__file__).resolve().parents[2] / ".env"
+        if env_file.is_file():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "DATABASE_URL":
+                    url = value.strip().strip("\"'")
+    if not url:
+        raise HarnessApiError("DATABASE_URL이 없습니다: env로 지정하거나 backend/.env에 정의하세요.")
+    return url.replace("postgresql+psycopg://", "postgresql://", 1)
+
+
+def _promote_to_recruiter(user_id: str) -> None:
+    """2026-09-30(DEC-107): 공개 /auth/register가 recruiter 자가가입 보안 구멍을 막느라
+    이제 candidate만 받는다. recruiter 테스트 계정은 candidate로 만든 뒤 이 함수로 role만
+    SQL로 전환한다(프런트 e2e 하네스의 unit-19/unit-20에서 쓴 것과 동일한 접근)."""
+    with psycopg.connect(_database_url(), connect_timeout=5) as conn, conn.cursor() as cur:
+        cur.execute("UPDATE users SET role = 'recruiter' WHERE id = %s", (user_id,))
+
+
 def register_account(api: httpx.Client, role: Role = "candidate") -> HarnessAccount:
     email = new_marker_email()
     password = secrets.token_urlsafe(16)
     name = f"harness-{role}"
     resp = api.post(
         f"{API_V1}/auth/register",
-        json={"email": email, "password": password, "name": name, "role": role},
+        json={"email": email, "password": password, "name": name, "role": "candidate"},
     )
     if resp.status_code != 201:
         raise HarnessApiError(f"회원가입 실패: {resp.status_code} {resp.text}")
-    return HarnessAccount(email=email, password=password, role=role, name=name, user_id=resp.json()["id"])
+    user_id = resp.json()["id"]
+    if role == "recruiter":
+        _promote_to_recruiter(user_id)
+    return HarnessAccount(email=email, password=password, role=role, name=name, user_id=user_id)
 
 
 def login_account(api: httpx.Client, account: HarnessAccount) -> HarnessAccount:

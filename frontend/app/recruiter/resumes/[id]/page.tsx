@@ -40,6 +40,49 @@ function formatDateTime(iso: string | null): string {
 
 const WEEKDAY_LABEL = ["일", "월", "화", "수", "목", "금", "토"];
 
+// 2026-09-30(사용자 지시): 합격/불합격 안내 문구를 자유 텍스트 대신 드롭다운
+// 템플릿 선택으로 변경. 문구 내용 자체는 초안이며, 원하는 표현으로 언제든
+// 교체 가능(이 배열만 수정하면 됨).
+const ACCEPT_TEMPLATES = [
+  "축하드립니다. 안내해드린 일정에 맞춰 모의면접을 진행해주시기 바랍니다.",
+  "우수한 서류 평가를 받으셨습니다. 다음 단계인 모의면접에서 뵙겠습니다.",
+  "귀하의 경험과 역량이 저희가 찾는 인재상에 부합하여 합격하셨습니다.",
+] as const;
+
+const REJECT_TEMPLATES = [
+  "이번 채용에는 아쉽게 인연이 닿지 않았으나, 좋은 결과로 다시 뵙기를 바랍니다.",
+  "서류 심사 결과 이번 채용 요건에는 부합하지 않아 아쉽게 되었습니다.",
+  "많은 지원자 중 제한된 인원만 선발하는 과정에서 아쉬운 결과를 안내드립니다.",
+] as const;
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
+const MINUTE_OPTIONS = ["00", "30"];
+
+// select에 없는 값(과거 자유 텍스트에서 되돌린 값 등)이 현재 선택돼 있으면 목록
+// 맨 앞에 임시로 추가해 원본을 그대로 보여준다 — 값을 잃어버리지 않기 위함.
+function withCurrentAsOption(options: readonly string[], current: string): string[] {
+  if (!current || options.includes(current)) return [...options];
+  return [current, ...options];
+}
+
+function formatLocalDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// 2026-09-30(사용자 지시): "면접일자는 기본으로 오늘 날짜 +7일로 지정 (토요일/
+// 일요일 제외, +7일이 주말이면 그 다음 월요일로)".
+function defaultInterviewDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  const day = d.getDay(); // 0=일, 6=토
+  if (day === 6) d.setDate(d.getDate() + 2);
+  else if (day === 0) d.setDate(d.getDate() + 1);
+  return formatLocalDate(d);
+}
+
 // "YYYY-MM-DD(요일) HH:MM 나머지 문구" 형식으로 저장된 기존 값을 날짜/시간/보충 문구로
 // 되돌린다. 이 형식이 아닌 옛 자유 텍스트는 통째로 보충 문구 칸에 넣고 날짜/시간은
 // 비워둔다 — 잘못 쪼개서 보여주는 것보다 안전하다(2026-09-30, 사용자 지시로 날짜/시간
@@ -70,7 +113,8 @@ export default function RecruiterResumeDetailPage() {
   const [detail, setDetail] = useState<RecruiterResumeDetailOut | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [decisionNote, setDecisionNote] = useState("");
+  const [acceptNote, setAcceptNote] = useState("");
+  const [rejectNote, setRejectNote] = useState("");
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("");
   const [scheduleExtra, setScheduleExtra] = useState("");
@@ -107,10 +151,20 @@ export default function RecruiterResumeDetailPage() {
     getRecruiterResumeDetail(accessToken, params.id)
       .then((d) => {
         setDetail(d);
-        setDecisionNote(d.decision_note ?? "");
+        setAcceptNote(d.status === "accepted" ? d.decision_note ?? "" : "");
+        setRejectNote(d.status === "rejected" ? d.decision_note ?? "" : "");
         const parsed = parseScheduleNote(d.interview_schedule_note);
-        setScheduleDate(parsed.date);
-        setScheduleTime(parsed.time);
+        // 2026-09-30(사용자 지시): 일정이 "한 번도 설정된 적 없을 때만" 오늘+7일(주말 제외)·
+        // 14:00을 기본값으로 채운다. 과거 자유 텍스트(파싱 안 되는 값)가 이미 있으면 그건
+        // 실제 결정 없이 남겨둔 메모일 수 있으므로, 없는 날짜를 지어내 붙이지 않는다 —
+        // 실측 중 이 구분을 안 두면 옛 메모에 임의의 날짜가 섞여 붙는 결함을 발견해 수정.
+        if (!d.interview_schedule_note) {
+          setScheduleDate(defaultInterviewDate());
+          setScheduleTime("14:00");
+        } else {
+          setScheduleDate(parsed.date);
+          setScheduleTime(parsed.time);
+        }
         setScheduleExtra(parsed.extra);
       })
       .catch((err: unknown) => {
@@ -137,17 +191,22 @@ export default function RecruiterResumeDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, detail?.id]);
 
+  // 면접 일정은 합격 시에만 의미가 있어 "합격 처리" 버튼만 막는다(불합격은 무관).
   const scheduleIncomplete = (!!scheduleDate) !== (!!scheduleTime);
+  const acceptBlocked = saving || scheduleIncomplete || !acceptNote;
+  const rejectBlocked = saving || !rejectNote;
 
   async function handleDecision(nextStatus: "accepted" | "rejected") {
-    if (!accessToken || !params.id || saving || scheduleIncomplete) return;
+    if (!accessToken || !params.id) return;
+    if (nextStatus === "accepted" && acceptBlocked) return;
+    if (nextStatus === "rejected" && rejectBlocked) return;
     setSaving(true);
     setActionError(null);
     try {
       const updated = await decideResume(accessToken, params.id, {
         status: nextStatus,
-        decision_note: decisionNote.trim() || undefined,
-        interview_schedule_note: composeScheduleNote(scheduleDate, scheduleTime, scheduleExtra),
+        decision_note: nextStatus === "accepted" ? acceptNote : rejectNote,
+        interview_schedule_note: nextStatus === "accepted" ? composeScheduleNote(scheduleDate, scheduleTime, scheduleExtra) : undefined,
       });
       setDetail(updated);
       setDraft(null);
@@ -300,17 +359,39 @@ export default function RecruiterResumeDetailPage() {
       <section style={{ marginTop: 24 }}>
         <h2>합격/불합격 결정</h2>
         <div className="field">
-          <label htmlFor="decision-note">합격 안내 문구 또는 불합격 사유</label>
-          <textarea
-            id="decision-note"
-            value={decisionNote}
-            onChange={(e) => setDecisionNote(e.target.value)}
-            rows={3}
+          <label htmlFor="accept-note">합격 안내 문구 (합격 처리 시 필수)</label>
+          <select
+            id="accept-note"
+            value={acceptNote}
+            onChange={(e) => setAcceptNote(e.target.value)}
             style={{ width: "100%" }}
-          />
+          >
+            <option value="">합격 안내 문구를 선택해주세요</option>
+            {withCurrentAsOption(ACCEPT_TEMPLATES, acceptNote).map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="field">
-          <label htmlFor="schedule-date">면접 일정 안내 (선택 입력, 참고용이에요)</label>
+          <label htmlFor="reject-note">불합격 안내 문구 (불합격 처리 시 필수)</label>
+          <select
+            id="reject-note"
+            value={rejectNote}
+            onChange={(e) => setRejectNote(e.target.value)}
+            style={{ width: "100%" }}
+          >
+            <option value="">불합격 안내 문구를 선택해주세요</option>
+            {withCurrentAsOption(REJECT_TEMPLATES, rejectNote).map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="schedule-date">면접 일정 안내 (합격 시에만 사용, 참고용이에요)</label>
           <div style={{ display: "flex", gap: 8 }}>
             <input
               id="schedule-date"
@@ -320,14 +401,30 @@ export default function RecruiterResumeDetailPage() {
               onChange={(e) => setScheduleDate(e.target.value)}
               style={{ flex: 1 }}
             />
-            <input
-              id="schedule-time"
-              type="time"
-              aria-label="면접 시간"
-              value={scheduleTime}
-              onChange={(e) => setScheduleTime(e.target.value)}
+            <select
+              aria-label="면접 시(24시간 기준)"
+              value={scheduleTime.split(":")[0] ?? ""}
+              onChange={(e) => setScheduleTime(`${e.target.value}:${scheduleTime.split(":")[1] ?? "00"}`)}
               style={{ flex: 1 }}
-            />
+            >
+              {withCurrentAsOption(HOUR_OPTIONS, scheduleTime.split(":")[0] ?? "").map((h) => (
+                <option key={h} value={h}>
+                  {h}시
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="면접 분"
+              value={scheduleTime.split(":")[1] ?? ""}
+              onChange={(e) => setScheduleTime(`${scheduleTime.split(":")[0] ?? "00"}:${e.target.value}`)}
+              style={{ flex: 1 }}
+            >
+              {withCurrentAsOption(MINUTE_OPTIONS, scheduleTime.split(":")[1] ?? "").map((m) => (
+                <option key={m} value={m}>
+                  {m}분
+                </option>
+              ))}
+            </select>
           </div>
           {scheduleIncomplete && (
             <div className="field-error">면접 날짜와 시간을 모두 입력해주세요.</div>
@@ -343,14 +440,14 @@ export default function RecruiterResumeDetailPage() {
           />
         </div>
         <div style={{ display: "flex", gap: 12 }}>
-          <button type="button" className="submit-button" disabled={saving || scheduleIncomplete} onClick={() => handleDecision("accepted")}>
+          <button type="button" className="submit-button" disabled={acceptBlocked} onClick={() => handleDecision("accepted")}>
             {saving ? "저장 중..." : "합격 처리"}
           </button>
           <button
             type="button"
             className="submit-button"
             style={{ background: "var(--color-text-secondary)" }}
-            disabled={saving || scheduleIncomplete}
+            disabled={rejectBlocked}
             onClick={() => handleDecision("rejected")}
           >
             {saving ? "저장 중..." : "불합격 처리"}

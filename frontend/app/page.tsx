@@ -82,13 +82,6 @@ export default function HomePage() {
           <Link href="/login" className="submit-button" style={{ textAlign: "center", textDecoration: "none" }}>
             로그인
           </Link>
-          <Link
-            href="/register"
-            className="submit-button"
-            style={{ textAlign: "center", textDecoration: "none", background: "var(--color-text-secondary)" }}
-          >
-            회원가입
-          </Link>
         </div>
       </div>
     </div>

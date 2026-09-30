@@ -703,6 +703,19 @@ export function markResumeNotified(accessToken: string, applicationId: string): 
   });
 }
 
+// 2026-09-30(사용자 지시, 보안 강화): 채용담당자 계정은 이제 공개 회원가입이 아니라
+// 이미 로그인한 채용담당자만 호출 가능한 이 엔드포인트로만 만들 수 있다.
+export function createRecruiter(
+  accessToken: string,
+  input: { email: string; password: string; name: string },
+): Promise<UserOut> {
+  return request<UserOut>("/recruiter/recruiters", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
 export function assignRubricTemplate(
   accessToken: string,
   interviewId: string,

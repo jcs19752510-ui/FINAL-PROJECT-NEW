@@ -18,19 +18,20 @@
 """
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.api.v1.interviews import _report_to_out
 from app.core.errors import AppError
+from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.evaluation_report import EvaluationReport
 from app.models.interview import Interview, ReportStatus
 from app.models.rubric_template import RubricTemplate
 from app.models.user import User, UserRole
-from app.schemas.recruiter import RecruiterInterviewListItemOut, RecruiterReportDetailOut
+from app.schemas.recruiter import RecruiterCreateIn, RecruiterInterviewListItemOut, RecruiterReportDetailOut
 from app.schemas.rubric_template import (
     RubricTemplateAssignIn,
     RubricTemplateAssignOut,
@@ -38,6 +39,7 @@ from app.schemas.rubric_template import (
     RubricTemplateOut,
     RubricTemplateUpdateIn,
 )
+from app.schemas.user import UserOut
 from app.services.job_queue import MAX_QUEUE_LENGTH, enqueue_report_generation_job, queue_length
 
 router = APIRouter(prefix="/recruiter", tags=["recruiter"])
@@ -309,3 +311,32 @@ def assign_rubric_template(
         db.commit()
 
     return RubricTemplateAssignOut(interview_id=interview.id, rubric_template_id=template.id, job_id=job_id)
+
+
+@router.post("/recruiters", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def create_recruiter(
+    payload: RecruiterCreateIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """2026-09-30(사용자 지시): 채용담당자(관리자) 계정은 더 이상 공개 회원가입으로
+    만들 수 없다 — 오직 이미 로그인한 채용담당자만 이 엔드포인트로 새 채용담당자
+    계정을 추가할 수 있다(role은 항상 recruiter로 고정, 호출자가 바꿀 수 없음).
+    최초 1명의 채용담당자 계정은 여전히 운영자가 DB에 직접 만들어야 한다(부트스트랩
+    문제 — 닭이 먼저냐 달걀이 먼저냐이므로 이 엔드포인트로 스스로 풀 수 없음)."""
+    _require_recruiter(current_user)
+
+    existing = db.scalar(select(User).where(User.email == payload.email))
+    if existing is not None:
+        raise AppError(409, "VALIDATION_ERROR", "Conflict", "이미 가입된 이메일입니다.")
+
+    user = User(
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        name=payload.name,
+        role=UserRole.recruiter,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user

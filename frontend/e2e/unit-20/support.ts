@@ -9,6 +9,7 @@
 // 테스트 데이터 규약(§3): 모든 계정은 `harness_test_<uuid4>@harness-test.example` 마커 이메일이며,
 // 만든 계정은 JSONL 로그(E2E_ACCOUNT_LOG, 기본 `<repo>/.harness-tmp/e2e-accounts.jsonl`)에 남긴다.
 // 실행 후 정리: 로그의 각 이메일에 대해 `python -m tests.support.cleanup --email <이메일>` (backend/에서).
+import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -17,6 +18,22 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 export const API_BASE = (process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
 const ACCOUNT_LOG =
   process.env.E2E_ACCOUNT_LOG ?? path.resolve(process.cwd(), "..", ".harness-tmp", "e2e-accounts.jsonl");
+
+// 2026-09-30(DEC-107) — unit-19/helpers.ts::sql()와 동일한 패턴(신규 패키지 없이 Node에서
+// DB에 닿는 유일한 경로). recruiter 테스트 계정의 role 전환에만 쓴다.
+const DB_CONTAINER = process.env.E2E_DB_CONTAINER ?? "final-project-db";
+const DB_USER = process.env.E2E_DB_USER ?? "final_app";
+const DB_NAME = process.env.E2E_DB_NAME ?? "final_project";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function sql(query: string): void {
+  execFileSync("docker", ["exec", DB_CONTAINER, "psql", "-U", DB_USER, "-d", DB_NAME, "-v", "ON_ERROR_STOP=1", "-At", "-c", query]);
+}
+
+function assertUuid(id: string): string {
+  if (!UUID_RE.test(id)) throw new Error(`UUID 형식이 아닌 값은 SQL에 넣지 않는다: ${id}`);
+  return id;
+}
 
 export type Role = "candidate" | "recruiter";
 export interface Account {
@@ -54,9 +71,14 @@ function logAccount(entry: { id: string; email: string; role: Role }) {
 export async function createAccount(role: Role = "candidate"): Promise<Account> {
   const email = `harness_test_${randomUUID()}@harness-test.example`;
   const password = randomBytes(12).toString("base64url");
-  const reg = await call("POST", "/auth/register", undefined, { email, password, name: "u20 e2e", role });
+  // 2026-09-30(DEC-107): 공개 /auth/register는 recruiter 자가가입 보안 구멍을 막느라
+  // 이제 candidate만 받는다. recruiter 테스트 계정은 candidate로 만든 뒤 role만 SQL로 전환.
+  const reg = await call("POST", "/auth/register", undefined, { email, password, name: "u20 e2e", role: "candidate" });
   if (reg.status !== 201) throw new Error(`register failed: ${reg.status} ${JSON.stringify(reg.json)}`);
   logAccount({ id: reg.json.id, email, role });
+  if (role === "recruiter") {
+    sql(`update users set role='recruiter' where id='${assertUuid(reg.json.id)}'`);
+  }
   const login = await call("POST", "/auth/login", undefined, { email, password });
   if (login.status !== 200) throw new Error(`login failed: ${login.status}`);
   return { id: reg.json.id, email, password, token: login.json.access_token, role };
