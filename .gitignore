@@ -43,3 +43,10 @@ frontend/npm-debug.log*
 frontend/test-results/
 frontend/playwright-report/
 frontend/blob-report/
+
+# 채용 지원 포털(2026-09-29, DEC-100 — frontend와 별도 Next.js 앱)
+# [2026-09-30 정정] 이 항목이 없어 frontend-apply/node_modules·.next가 실수로
+# 커밋(21,351개 파일, .git 330MB)됐던 것을 뒤늦게 발견해 추가한다(DEC-110).
+frontend-apply/node_modules/
+frontend-apply/.next/
+frontend-apply/npm-debug.log*
