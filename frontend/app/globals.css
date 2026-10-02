@@ -75,6 +75,20 @@ a {
   color: var(--color-text-primary);
 }
 
+/* 2026-09-30(frontend-apply/app/globals.css와 동일 수정을 이 앱에도 예방적으로
+   반영) — `.field input`이 텍스트 입력 전제라 체크박스에 적용되면 거대한
+   막대로 보이는 문제가 있다. 이 앱은 현재 `.field` 안에 체크박스를 쓰는 화면이
+   없지만, 앞으로 추가될 때 같은 결함이 재발하지 않도록 동일 규칙을 미리 둔다. */
+.field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--color-primary-600);
+}
+
 .field input:focus-visible {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
@@ -514,6 +528,52 @@ a {
 .room-tabs__note {
   font-size: 13px;
   color: var(--color-text-secondary);
+}
+
+/* 2026-09-30(사용자 지시): "제출 절차 안내" 화면용 단계 카드 —
+   frontend-apply/app/globals.css의 동일 클래스와 토큰만 다르고 규칙은 같다. */
+.guide-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.guide-step__num {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-primary-600);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.guide-step__txt b {
+  display: block;
+  font-size: 14.5px;
+  margin-bottom: 2px;
+}
+
+.guide-step__txt span {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.guide-note {
+  background: var(--color-primary-100);
+  border: 1px solid var(--color-primary-600);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--color-text-primary);
 }
 
 .interview-room__webcam {

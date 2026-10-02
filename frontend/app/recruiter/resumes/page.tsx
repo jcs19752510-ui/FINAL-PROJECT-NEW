@@ -112,7 +112,7 @@ export default function RecruiterResumesPage() {
         <h1 style={{ margin: 0 }}>이력서 검토</h1>
       </div>
       <p className={styles.subtitle}>
-        제출된 이력서를 확인하고 합격/불합격을 정해주세요. 합격/불합격 안내는 이 화면에서 만든 초안을 관리자가 직접 보내는 방식이에요.
+        제출된 이력서를 확인하고 합격/불합격을 정해주세요. 처리하면 지원자에게 안내 메일이 자동으로 발송돼요.
       </p>
 
       {loadError && (

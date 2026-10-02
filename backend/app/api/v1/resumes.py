@@ -43,13 +43,6 @@ def _write_resume_file(path: str, data: bytes) -> None:
         f.write(data)
 
 
-def _delete_resume_file(path: str) -> None:
-    try:
-        os.remove(path)
-    except OSError:
-        pass
-
-
 @router.post("/resumes", response_model=MyResumeStatusOut, status_code=status.HTTP_201_CREATED)
 async def submit_resume(
     request: Request,
@@ -61,8 +54,12 @@ async def submit_resume(
     - candidate role 전용(403).
     - 사전에 `resume_submission` 동의가 없으면 거부(403) — unit-14/15가 확립한
       "새 개인정보 수집은 신규 ConsentType 사전동의 필수" 패턴을 그대로 따른다.
-    - 재제출 시 기존 지원서를 덮어쓰고 상태를 `pending`으로 되돌린다(모델
-      docstring 참고, 재심사 요청으로 해석).
+    - 2026-09-30(사용자 지시, DEC-118): 이미 제출 기록이 있으면(상태 무관 —
+      pending/accepted/rejected 전부) 재제출을 막는다(409). 예전에는 재제출
+      시 기존 지원서를 덮어쓰고 상태를 `pending`으로 되돌리는 정책이었으나,
+      "이력서를 제출한 이후에는 상태만 확인 가능해야 한다"는 새 요구로
+      대체됐다 — 화면(프런트) 차단만으로는 API를 직접 호출하는 우회를 막지
+      못해 백엔드도 함께 막기로 사용자가 명시 확인.
     """
     if current_user.role != UserRole.candidate:
         raise AppError(403, "AUTH_FORBIDDEN", "Forbidden", "지원자(candidate)만 이력서를 제출할 수 있습니다.")
@@ -73,6 +70,15 @@ async def submit_resume(
             "CONSENT_REQUIRED_RESUME",
             "Forbidden",
             "이력서 제출 전 개인정보 수집 동의가 필요합니다.",
+        )
+
+    existing = db.scalar(select(ResumeApplication).where(ResumeApplication.candidate_id == current_user.id))
+    if existing is not None:
+        raise AppError(
+            409,
+            "RESUME_ALREADY_SUBMITTED",
+            "Conflict",
+            "이미 이력서를 제출했습니다. 재제출은 지원하지 않으며, 제출 상태만 확인할 수 있습니다.",
         )
 
     try:
@@ -104,28 +110,9 @@ async def submit_resume(
             f"이력서 파일이 너무 큽니다 (최대 {MAX_RESUME_UPLOAD_BYTES // (1024 * 1024)}MB).",
         )
 
-    existing = db.scalar(select(ResumeApplication).where(ResumeApplication.candidate_id == current_user.id))
     file_name = f"{uuid.uuid4()}.pdf"
     dest_path = os.path.join(_resume_storage_dir(), file_name)
     await run_in_threadpool(_write_resume_file, dest_path, file_bytes)
-
-    if existing is not None:
-        old_path = existing.file_path
-        existing.file_path = dest_path
-        existing.original_filename = file.filename or "resume.pdf"
-        existing.content_type = content_type
-        existing.file_size_bytes = len(file_bytes)
-        existing.status = ResumeApplicationStatus.pending
-        existing.decision_note = None
-        existing.interview_schedule_note = None
-        existing.reviewed_by = None
-        existing.reviewed_at = None
-        existing.notified_at = None
-        db.commit()
-        db.refresh(existing)
-        if old_path != dest_path:
-            await run_in_threadpool(_delete_resume_file, old_path)
-        return existing
 
     application = ResumeApplication(
         candidate_id=current_user.id,
