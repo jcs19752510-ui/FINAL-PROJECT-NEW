@@ -18,15 +18,12 @@ import {
   ApiError,
   type NotificationDraftOut,
   type RecruiterReportDetailOut,
-  type RubricTemplateOut,
   type UserOut,
-  assignRubricTemplate,
   clearAccessToken,
   decideFinal,
   getFinalNotificationDraft,
   getMe,
   getRecruiterReportDetail,
-  listRubricTemplates,
   markFinalNotified,
   readAccessToken,
 } from "@/lib/api";
@@ -82,15 +79,8 @@ export default function RecruiterReportDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // v15(03-system-design v4 §4.6 (2), 04-ux-design [R-02], unit-37): 채점 템플릿
-  // 변경 컨트롤. 브라우저 confirm()은 이 플랫폼에서 동작하지 않아(artifact/webview
-  // 계열 공통 제약) 화면 내 확인 문구로 대체한다(04 명세 그대로).
-  const [templates, setTemplates] = useState<RubricTemplateOut[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
-  const [confirmingApply, setConfirmingApply] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [applyMessage, setApplyMessage] = useState<string | null>(null);
-  const [applyError, setApplyError] = useState<string | null>(null);
+  // 채점 템플릿 변경/재채점 UI 는 2026-10-07 사용자 요청으로 제거했다(기본 루브릭 1개만 사용 — 서버 API 는 유지).
+  // 최종 합격/불합격 처리 후 서버 최신 상태를 다시 불러오는 데 쓴다.
   const [reloadNonce, setReloadNonce] = useState(0);
 
   // 최종 합격/불합격(2026-10-07): 면접 완료 건 1회 처리 + 안내 메일 자동 발송.
@@ -125,7 +115,6 @@ export default function RecruiterReportDetailPage() {
     getRecruiterReportDetail(accessToken, params.id)
       .then((d) => {
         setDetail(d);
-        if (d.rubric) setSelectedTemplateId(d.rubric.template_id);
       })
       .catch((err: unknown) => {
         setLoadError(
@@ -134,43 +123,6 @@ export default function RecruiterReportDetailPage() {
       })
       .finally(() => setLoading(false));
   }, [accessToken, user, params.id, reloadNonce]);
-
-  useEffect(() => {
-    if (!accessToken || !user || user.role !== "recruiter") return;
-    listRubricTemplates(accessToken)
-      .then(setTemplates)
-      .catch(() => {
-        // 템플릿 목록 실패는 조용히 무시 — 리포트 본문 표시는 그대로 진행(부가 기능).
-      });
-  }, [accessToken, user]);
-
-  async function handleApplyTemplate() {
-    if (!accessToken || !params.id || !selectedTemplateId || applying) return;
-    setApplying(true);
-    setApplyError(null);
-    setApplyMessage(null);
-    try {
-      const result = await assignRubricTemplate(accessToken, params.id, selectedTemplateId);
-      if (result.job_id) {
-        setApplyMessage("채점 중입니다. 잠시 후 새로고침하면 결과가 반영됩니다.");
-      } else {
-        setApplyMessage("적용됨");
-      }
-      setConfirmingApply(false);
-      setReloadNonce((n) => n + 1);
-    } catch (err: unknown) {
-      if (err instanceof ApiError && err.status === 409) {
-        setApplyError("이미 채점이 진행 중입니다.");
-      } else if (err instanceof ApiError && err.status === 503) {
-        setApplyError("지금 처리 대기 중인 작업이 많습니다. 잠시 후 다시 시도해 주세요.");
-      } else {
-        setApplyError(err instanceof ApiError ? err.message : "적용 중 오류가 발생했습니다.");
-      }
-      setConfirmingApply(false);
-    } finally {
-      setApplying(false);
-    }
-  }
 
   // 이미 처리된 건은 다시 처리할 수 없다(서버도 409로 막는다) — 버튼은 처리 중·문구 미선택일 때도 막는다.
   const finalDecided = detail?.final_decision != null;
@@ -287,59 +239,6 @@ export default function RecruiterReportDetailPage() {
             <span>응시 종료: {formatDateTime(detail.ended_at)}</span>
             <span>종합 점수: {detail.overall_score ?? "-"}</span>
           </div>
-
-          {templates.length > 0 && (
-            <div style={{ margin: "12px 0", padding: "10px 12px", border: "1px solid var(--color-border, #e5e5e5)", borderRadius: 8 }}>
-              <label htmlFor="rubric-template-select" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-                채점 템플릿
-                {detail.rubric && !templates.some((t) => t.id === detail.rubric!.template_id) && (
-                  <span style={{ color: "var(--color-text-secondary)", marginLeft: 6 }}>
-                    (현재: {detail.rubric.name} — 다른 담당자 템플릿)
-                  </span>
-                )}
-              </label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <select
-                  id="rubric-template-select"
-                  value={selectedTemplateId}
-                  onChange={(e) => {
-                    setSelectedTemplateId(e.target.value);
-                    setConfirmingApply(false);
-                  }}
-                >
-                  {!detail.rubric && <option value="">선택...</option>}
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                      {t.is_system_default ? " (기본)" : ""}
-                    </option>
-                  ))}
-                </select>
-                {!confirmingApply ? (
-                  <button
-                    type="button"
-                    className="submit-button"
-                    disabled={!selectedTemplateId}
-                    onClick={() => setConfirmingApply(true)}
-                  >
-                    이 템플릿으로 다시 채점
-                  </button>
-                ) : (
-                  <span style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-                    리포트가 새 기준으로 다시 생성되며 지원자 화면에도 반영됩니다.
-                    <button type="button" className="submit-button" disabled={applying} onClick={handleApplyTemplate}>
-                      {applying ? "적용 중..." : "다시 채점"}
-                    </button>
-                    <button type="button" onClick={() => setConfirmingApply(false)} disabled={applying}>
-                      취소
-                    </button>
-                  </span>
-                )}
-              </div>
-              {applyMessage && <div className="banner-info" style={{ marginTop: 8 }}>{applyMessage}</div>}
-              {applyError && <div className="banner-error" style={{ marginTop: 8 }}>{applyError}</div>}
-            </div>
-          )}
 
           <div className={styles.reportBody}>
             {!detail.report_available ? (
