@@ -16,6 +16,29 @@
   margin: 0 0 24px;
 }
 
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.filterLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.filterSelect {
+  min-width: 140px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;
