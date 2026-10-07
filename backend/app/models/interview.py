@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +32,14 @@ class ReportStatus(StrEnum):
     queued = "queued"
     ready = "ready"
     failed = "failed"
+
+
+class FinalDecision(StrEnum):
+    """면접 완료 후 채용담당자가 내리는 최종 합격/불합격(2026-10-07 사용자 요청).
+    NULL = 아직 미처리. 한 번 저장되면 변경할 수 없다(사용자 결정, 재발송 사고 방지)."""
+
+    accepted = "accepted"
+    rejected = "rejected"
 
 
 class Interview(Base):
@@ -55,4 +63,16 @@ class Interview(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     overall_score: Mapped[Decimal | None] = mapped_column(Numeric(3, 1), nullable=True)
+    # 최종 합격/불합격(면접 `completed` 건에 한해 채용담당자가 1회만 처리). 이력서
+    # 합격 처리(resume_applications.status/decision_note/reviewed_*/notified_at)와 같은
+    # 구조이며, 일정 안내(interview_schedule_note)는 사용자 결정으로 제외했다.
+    final_decision: Mapped[FinalDecision | None] = mapped_column(
+        Enum(FinalDecision, name="final_decision"), nullable=True
+    )
+    final_decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    final_decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    final_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

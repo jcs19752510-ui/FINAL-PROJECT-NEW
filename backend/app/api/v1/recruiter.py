@@ -136,6 +136,10 @@ def get_report_detail(
         summary_text=canonical.summary_text if canonical else None,
         details=canonical.details if canonical else None,
         rubric=canonical.rubric if canonical else None,
+        final_decision=interview.final_decision.value if interview.final_decision else None,
+        final_decision_note=interview.final_decision_note,
+        final_decided_at=interview.final_decided_at,
+        final_notified_at=interview.final_notified_at,
     )
 
 

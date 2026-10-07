@@ -10,9 +10,10 @@
 """
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.schemas.interview import RubricOut, StarOut
 
@@ -62,3 +63,30 @@ class RecruiterReportDetailOut(BaseModel):
     # v15(03-system-design v4 §4.6 (5), unit-37) — [R-02]도 [C-11]과 같은 루브릭
     # 섹션을 쓴다(04-ux-design.md [C-11]/[R-02] 공통 명세).
     rubric: RubricOut | None = None
+    # 최종 합격/불합격(2026-10-07) — 미처리면 전부 None.
+    final_decision: Literal["accepted", "rejected"] | None = None
+    final_decision_note: str | None = None
+    final_decided_at: datetime | None = None
+    final_notified_at: datetime | None = None
+
+
+class FinalDecisionOut(BaseModel):
+    interview_id: UUID
+    final_decision: Literal["accepted", "rejected"] | None = None
+    final_decision_note: str | None = None
+    final_decided_at: datetime | None = None
+    final_notified_at: datetime | None = None
+
+
+class FinalDecisionIn(BaseModel):
+    """최종 합격/불합격 처리 입력. 안내 문구는 필수(이력서 합격 처리와 동일)이며,
+    프런트가 드롭다운으로만 고르게 하지만 서버도 공백·과도한 길이를 거부한다."""
+
+    status: Literal["accepted", "rejected"]
+    decision_note: str = Field(min_length=1, max_length=500)
+
+    # 앞뒤 공백을 먼저 제거한 뒤 길이(1~500)를 검사한다(공백만 입력하면 빈 문자열로 422).
+    @field_validator("decision_note", mode="before")
+    @classmethod
+    def _strip_note(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
