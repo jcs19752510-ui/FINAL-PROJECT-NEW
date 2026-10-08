@@ -257,6 +257,11 @@ export interface StarOut {
 }
 
 export interface RecruiterReportDetailOut extends RecruiterInterviewListItemOut {
+  // 최종 합격/불합격(2026-10-07) — 미처리면 전부 null.
+  final_decision: "accepted" | "rejected" | null;
+  final_decision_note: string | null;
+  final_decided_at: string | null;
+  final_notified_at: string | null;
   report_available: boolean;
   message: string;
   technical_score: number | null;
@@ -349,6 +354,40 @@ export function getRecruiterReportDetail(
   interviewId: string,
 ): Promise<RecruiterReportDetailOut> {
   return request<RecruiterReportDetailOut>(`/recruiter/reports/${interviewId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// 최종 합격/불합격 처리(2026-10-07) — 면접 `completed` 건에 한해 1회만 처리, 처리 즉시 지원자에게 안내 메일 자동 발송.
+export interface FinalDecisionOut {
+  interview_id: string;
+  final_decision: "accepted" | "rejected" | null;
+  final_decision_note: string | null;
+  final_decided_at: string | null;
+  final_notified_at: string | null;
+}
+
+export function decideFinal(
+  accessToken: string,
+  interviewId: string,
+  input: { status: "accepted" | "rejected"; decision_note: string },
+): Promise<FinalDecisionOut> {
+  return request<FinalDecisionOut>(`/recruiter/reports/${interviewId}/final-decision`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function getFinalNotificationDraft(accessToken: string, interviewId: string): Promise<NotificationDraftOut> {
+  return request<NotificationDraftOut>(`/recruiter/reports/${interviewId}/final-notification-draft`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function markFinalNotified(accessToken: string, interviewId: string): Promise<FinalDecisionOut> {
+  return request<FinalDecisionOut>(`/recruiter/reports/${interviewId}/final-mark-notified`, {
+    method: "POST",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 }

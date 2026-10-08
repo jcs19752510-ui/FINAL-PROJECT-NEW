@@ -39,6 +39,11 @@ const REPORT_STATUS_LABEL: Record<RecruiterInterviewListItemOut["report_status"]
   failed: "실패",
 };
 
+type StatusFilter = "all" | RecruiterInterviewListItemOut["status"];
+
+// "전체"를 맨 앞에 두고 면접 상태(STATUS_LABEL)를 진행 순서대로 나열한다.
+const STATUS_FILTER_OPTIONS: StatusFilter[] = ["all", "scheduled", "live", "paused", "completed", "expired"];
+
 function formatDateTime(iso: string | null): string {
   if (!iso) return "-";
   return new Date(iso).toLocaleString("ko-KR");
@@ -53,6 +58,7 @@ export default function RecruiterDashboardPage() {
 
   const [reports, setReports] = useState<RecruiterInterviewListItemOut[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   useEffect(() => {
     if (!accessToken) {
@@ -119,6 +125,10 @@ export default function RecruiterDashboardPage() {
     );
   }
 
+  // 서버가 내려준 목록을 그대로 두고 화면에서만 거른다(추가 API 호출 없음).
+  const filteredReports =
+    reports === null || statusFilter === "all" ? reports : reports.filter((r) => r.status === statusFilter);
+
   return (
     <div className={styles.page}>
       <HomeLink />
@@ -127,6 +137,24 @@ export default function RecruiterDashboardPage() {
         <h1 style={{ margin: 0 }}>지원자 리포트 목록</h1>
       </div>
       <p className={styles.subtitle}>우리 조직의 모든 지원자 면접 내역을 볼 수 있어요.</p>
+
+      <div className={styles.filterRow}>
+        <label htmlFor="status-filter" className={styles.filterLabel}>
+          면접 상태
+        </label>
+        <select
+          id="status-filter"
+          className={styles.filterSelect}
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+        >
+          {STATUS_FILTER_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {s === "all" ? "전체" : STATUS_LABEL[s]}
+            </option>
+          ))}
+        </select>
+      </div>
 
       {loadError && (
         <div className="banner-error" role="alert" style={{ marginBottom: 16 }}>
@@ -140,6 +168,8 @@ export default function RecruiterDashboardPage() {
         </div>
       ) : reports.length === 0 ? (
         <div className={styles.emptyText}>아직 열람 가능한 리포트가 없습니다.</div>
+      ) : filteredReports!.length === 0 ? (
+        <div className={styles.emptyText}>선택한 면접 상태의 내역이 없습니다.</div>
       ) : (
         <table className={styles.table}>
           <thead>
@@ -153,7 +183,7 @@ export default function RecruiterDashboardPage() {
             </tr>
           </thead>
           <tbody>
-            {reports.map((r) => (
+            {filteredReports!.map((r) => (
               <tr
                 key={r.interview_id}
                 className={styles.tableRow}

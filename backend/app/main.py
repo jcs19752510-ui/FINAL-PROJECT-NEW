@@ -11,6 +11,7 @@ from app.api.v1.consents import router as consents_router
 from app.api.v1.interviews import router as interviews_router
 from app.api.v1.ops import router as ops_router
 from app.api.v1.recruiter import router as recruiter_router
+from app.api.v1.recruiter_final_decision import router as recruiter_final_decision_router
 from app.api.v1.recruiter_resumes import router as recruiter_resumes_router
 from app.api.v1.resumes import router as resumes_router
 from app.api.v1.webcam_emotion import router as webcam_emotion_router
@@ -107,6 +108,7 @@ app.include_router(consents_router, prefix="/api/v1")
 app.include_router(interviews_router, prefix="/api/v1")
 app.include_router(ops_router, prefix="/api/v1")
 app.include_router(recruiter_router, prefix="/api/v1")
+app.include_router(recruiter_final_decision_router, prefix="/api/v1")
 app.include_router(recruiter_resumes_router, prefix="/api/v1")
 app.include_router(resumes_router, prefix="/api/v1")
 app.include_router(webcam_emotion_router, prefix="/api/v1")
