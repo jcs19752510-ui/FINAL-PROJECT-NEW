@@ -19,8 +19,9 @@
 """
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, TypedDict
+from typing import Any, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever

@@ -21,11 +21,14 @@ from app.api.v1.ws import redis_relay_loop
 from app.api.v1.ws import router as ws_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
+from app.core.metrics import install_metrics
 from app.services.job_watchdog import job_watchdog_loop
 from app.services.prosody_engine import warmup as warmup_prosody_engine
 from app.services.tts_engine import MEDIA_ROOT
 
 app = FastAPI(title="AI 모의면접 플랫폼 API", version="0.1.0")
+# Prometheus 지표(기본 꺼짐, METRICS_ENABLED=true일 때만 /metrics 노출 — app/core/metrics.py)
+install_metrics(app, enabled=settings.metrics_enabled)
 
 # unit-7(REQ-007): AI Worker(Celery, 별도 프로세스)가 Redis Pub/Sub으로 발행한
 # §4.3 WS 이벤트를 이 API 프로세스의 ConnectionManager로 중계하는 백그라운드

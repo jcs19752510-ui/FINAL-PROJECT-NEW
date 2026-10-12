@@ -95,6 +95,7 @@ from app.services.prompt_safety import (
 )
 from app.services.prosody_engine import ProsodyAnalysisError, analyze_prosody
 from app.services.rubric_defaults import SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID
+from app.services.speech_rate import attach_speech_rate
 from app.services.stt_engine import SttTranscriptionError
 from app.services.stt_router import transcribe_audio_smart
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
@@ -697,6 +698,8 @@ async def _submit_voice_turn(
     prosody_json: dict | None = None
     try:
         prosody_json = await run_in_threadpool(analyze_prosody, audio_bytes)
+        # 발화 속도(분당 어절/음절)를 같은 JSON에 합친다(원본 REQ-F-006). 실패해도 예외를 내지 않는다.
+        prosody_json = attach_speech_rate(prosody_json, text)
     except ProsodyAnalysisError:
         logger.warning("prosody 분석 실패 — 그레이스풀 디그레이드(턴 저장에는 영향 없음)", exc_info=True)
     finally:

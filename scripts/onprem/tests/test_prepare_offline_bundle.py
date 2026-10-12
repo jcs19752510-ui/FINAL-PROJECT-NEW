@@ -2,6 +2,7 @@
 - 가짜 실행기/다운로더로 모든 분기를 검증하고, pip·npm 은 실제 네트워크로도 한 번 확인한다(접속 불가 시 건너뜀).
 - 프로젝트 코드의 상수(파일명·모델명·이미지)와 이 도구의 상수가 어긋나면 실패하도록 드리프트 검사를 둔다.
 실행: python -m pytest scripts/onprem/tests -q"""
+
 import importlib.util
 import json
 import pathlib
@@ -14,7 +15,9 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
-_SPEC = importlib.util.spec_from_file_location("prepare_offline_bundle", ROOT / "scripts/onprem/prepare_offline_bundle.py")
+_SPEC = importlib.util.spec_from_file_location(
+    "prepare_offline_bundle", ROOT / "scripts/onprem/prepare_offline_bundle.py"
+)
 pob = importlib.util.module_from_spec(_SPEC)
 sys.modules["prepare_offline_bundle"] = pob
 _SPEC.loader.exec_module(pob)
@@ -66,7 +69,9 @@ def fake_hf_download_factory(qwen_size=None):
         calls.append((repo, filename))
         dest_dir.mkdir(parents=True, exist_ok=True)
         p = dest_dir / pathlib.Path(filename).name
-        p.write_bytes(b"x" * (pob.QWEN_SIZE if (filename == pob.QWEN_FILE and qwen_size is None) else (qwen_size or 10)))
+        p.write_bytes(
+            b"x" * (pob.QWEN_SIZE if (filename == pob.QWEN_FILE and qwen_size is None) else (qwen_size or 10))
+        )
         return p
 
     hf.calls = calls
@@ -81,9 +86,17 @@ def fake_snapshot(repo, cache_dir, ignore):
 
 def make_ctx(tmp_path, run=None, qwen_size=None, dry=False):
     out = tmp_path / "bundle"
-    return pob.Ctx(out=out, repo=tmp_path / "repo", dry_run=dry, run=run or Recorder(), download=fake_download,
-                   hf_download=fake_hf_download_factory(qwen_size), hf_snapshot=fake_snapshot,
-                   python="python-fake", log=lambda m: None)
+    return pob.Ctx(
+        out=out,
+        repo=tmp_path / "repo",
+        dry_run=dry,
+        run=run or Recorder(),
+        download=fake_download,
+        hf_download=fake_hf_download_factory(qwen_size),
+        hf_snapshot=fake_snapshot,
+        python="python-fake",
+        log=lambda m: None,
+    )
 
 
 def factory_for(tmp_path, run=None, qwen_size=None):
@@ -126,7 +139,9 @@ def test_bu03_full_run_builds_manifest_with_hashes(repo):
     assert "llm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf" in paths
     assert "llm/models/smolvlm-500m-instruct-q8.gguf" in paths and "llm/models/smolvlm-mmproj-f16.gguf" in paths
     assert any(p.startswith("llm/bin/llama-b11050-bin-win-vulkan") for p in paths)
-    assert "docker/images.tar" in paths and any(p.startswith("hf_cache/models--Systran--faster-whisper-small") for p in paths)
+    assert "docker/images.tar" in paths and any(
+        p.startswith("hf_cache/models--Systran--faster-whisper-small") for p in paths
+    )
     assert all(len(f["sha256"]) == 64 for f in manifest["files"])
     assert pob.verify_bundle(repo / "bundle", log=lambda m: None) == 0
 
@@ -229,8 +244,10 @@ def test_bu13_piper_falls_back_to_hf_and_flattens(repo):
 
     ctx.hf_download = nested
     pob.step_piper(ctx)
-    assert hf_calls == [("rhasspy/piper-voices", "ko/ko_KR/kss/medium/ko_KR-kss-medium.onnx"),
-                        ("rhasspy/piper-voices", "ko/ko_KR/kss/medium/ko_KR-kss-medium.onnx.json")]
+    assert hf_calls == [
+        ("rhasspy/piper-voices", "ko/ko_KR/kss/medium/ko_KR-kss-medium.onnx"),
+        ("rhasspy/piper-voices", "ko/ko_KR/kss/medium/ko_KR-kss-medium.onnx.json"),
+    ]
     voices = ctx.out / "piper_voices"
     assert (voices / "ko_KR-kss-medium.onnx").exists() and (voices / "ko_KR-kss-medium.onnx.json").exists()
     del orig
@@ -307,9 +324,15 @@ def test_bu19_real_pip_and_npm_download(tmp_path):
     for app in ("frontend", "frontend-apply"):
         d = repo_dir / app
         d.mkdir()
-        (d / "package.json").write_text(json.dumps({"name": app, "version": "1.0.0", "dependencies": {"is-number": "7.0.0"}}))
-        subprocess.run(["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
-                       cwd=d, check=True, capture_output=True)
+        (d / "package.json").write_text(
+            json.dumps({"name": app, "version": "1.0.0", "dependencies": {"is-number": "7.0.0"}})
+        )
+        subprocess.run(
+            ["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+            cwd=d,
+            check=True,
+            capture_output=True,
+        )
     out = tmp_path / "bundle"
     ctx = pob.Ctx(out=out, repo=repo_dir, log=lambda m: None)
     pob.step_pip(ctx)
@@ -321,12 +344,30 @@ def test_bu19_real_pip_and_npm_download(tmp_path):
     install_dir.mkdir()
     for f in ("package.json", "package-lock.json"):
         (install_dir / f).write_bytes((repo_dir / "frontend" / f).read_bytes())
-    proc = subprocess.run(["npm", "ci", "--offline", "--ignore-scripts", "--cache", str(out / "npm-cache")],
-                          cwd=install_dir, capture_output=True, text=True)
+    proc = subprocess.run(
+        ["npm", "ci", "--offline", "--ignore-scripts", "--cache", str(out / "npm-cache")],
+        cwd=install_dir,
+        capture_output=True,
+        text=True,
+    )
     assert proc.returncode == 0, proc.stderr
     assert (install_dir / "node_modules" / "is-number").is_dir()
     # 받은 휠로 인터넷 없이 설치되는지(--no-index) 확인
     target = tmp_path / "pip_target"
-    proc = subprocess.run([sys.executable, "-m", "pip", "install", "--no-index", "--find-links", str(out / "pip"),
-                           "--target", str(target), "six==1.16.0"], capture_output=True, text=True)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--find-links",
+            str(out / "pip"),
+            "--target",
+            str(target),
+            "six==1.16.0",
+        ],
+        capture_output=True,
+        text=True,
+    )
     assert proc.returncode == 0, proc.stderr

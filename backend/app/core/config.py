@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     # False로 두면 이전 동작(키가 있으면 Deepgram 선시도)으로 돌아간다(롤백용).
     # 메일(SMTP) 발송은 지원자에게 전달해야 하는 외부 통신이라 이 모드의 차단 대상이 아니다.
     onprem_mode: bool = True
+    # 2026-10-12: Prometheus 지표 노출(GET /metrics). 인증이 없으므로 기본 꺼짐 — 내부망에서만 접근시킬 때 true로.
+    metrics_enabled: bool = False
     # unit-32/DEC-057(2026-09-23, 사용자 제공 키로 실측 검증): 벤더 어댑터는
     # `app/services/stt_adapter_deepgram.py`/`tts_adapter_elevenlabs.py`/
     # `whiteboard_vision.py`에 함수로만 존재하고 아직 어떤 API 엔드포인트에도

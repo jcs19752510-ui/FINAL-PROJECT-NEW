@@ -1,5 +1,6 @@
 """면접장 꼬리질문 그래프(app/services/turn_graph.py) 내부 테스트 — DB/LLM 서버 없이 분기 전체를 검증한다.
 실행: DATABASE_URL, JWT_SECRET_KEY 환경변수 필요(설정 객체 로딩용, 실제 접속은 하지 않음)."""
+
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,8 +19,8 @@ from app.worker import tasks  # noqa: E402
 
 GOOD = "그 경험에서 가장 어려웠던 점은 무엇이었나요?"
 GOOD2 = "그 문제를 팀과 어떻게 해결하셨는지 설명해 주세요."
-BAD_NOT_QUESTION = "알겠습니다 감사합니다"          # 질문형 아님
-BAD_PLACEHOLDER = "[이름]님은 어떤 경험이 있나요?"   # 플레이스홀더
+BAD_NOT_QUESTION = "알겠습니다 감사합니다"  # 질문형 아님
+BAD_PLACEHOLDER = "[이름]님은 어떤 경험이 있나요?"  # 플레이스홀더
 BAD_LEAK = "저는 시니어 기술 면접관입니다 어떻게 생각하나요?"  # 시스템 프롬프트 유출 마커
 FALLBACK_TEXT = "답변 감사합니다. 다음 질문으로 넘어가겠습니다."
 
@@ -99,7 +100,7 @@ def test_tc05_llm_failure_safe_default_keeps_candidates():
     final, calls = _run([LlmGenerationError("서버 다운")], candidates=cand)
     assert final["output"].speak_text == FALLBACK_TEXT
     assert final["llm_failed"] is True
-    assert final["candidates"] == cand            # question_id 기록용 후보 유지(기존 동작과 동일)
+    assert final["candidates"] == cand  # question_id 기록용 후보 유지(기존 동작과 동일)
     assert "validate" not in final["trace"] and len(calls) == 1
 
 
@@ -219,9 +220,16 @@ class _Handler(BaseHTTPRequestHandler):
         _Handler.received.append((self.path, body))
         content = _Handler.replies.pop(0)
         payload = json.dumps(
-            {"id": "x", "object": "chat.completion", "created": 0, "model": "local-gguf",
-             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}],
-             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+            {
+                "id": "x",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "local-gguf",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
             ensure_ascii=False,
         ).encode("utf-8")
         self.send_response(200)
@@ -251,7 +259,7 @@ def test_tc16_langchain_real_http_wire_format(fake_llama_server):
     assert out.speak_text == GOOD
     path, body = fake_llama_server.received[0]
     assert path == "/v1/chat/completions"
-    assert body["messages"][0] == {"role": "system", "content": "시스템 프롬프트"}   # role 분리 유지(인젝션 방어)
+    assert body["messages"][0] == {"role": "system", "content": "시스템 프롬프트"}  # role 분리 유지(인젝션 방어)
     assert body["messages"][1] == {"role": "user", "content": "사용자 메시지"}
     assert body["response_format"] == {"type": "json_object"}
     assert body["max_tokens"] == 300 and body["temperature"] == 0.6

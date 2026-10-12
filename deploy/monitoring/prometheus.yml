@@ -1,0 +1,15 @@
+# Prometheus 수집 설정 (원본 계획서 7.2, 2026-10-12)
+# 전제: 백엔드에 METRICS_ENABLED=true 를 설정해 /metrics 를 켠 상태.
+# Docker Desktop(Windows)에서 컨테이너가 호스트의 API(8001)에 닿도록 host.docker.internal 을 쓴다.
+# 리눅스 호스트에서는 docker-compose.monitoring.yml 의 extra_hosts(host-gateway)가 같은 이름을 제공한다.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: interview-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8001"]
+        labels:
+          service: interview-api

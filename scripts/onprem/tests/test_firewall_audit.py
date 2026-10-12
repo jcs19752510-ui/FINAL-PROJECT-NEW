@@ -1,6 +1,7 @@
 """firewall_audit.py 내부 테스트 — 공개된 pfirewall.log 형식에 맞춘 합성 로그로 검증한다.
 (실제 Windows PC의 로그로는 검증하지 못했다. 형식이 다르면 첫 실행에서 '형식 오류' 종료코드 2로 드러난다.)
 실행: python -m pytest scripts/onprem/tests -q"""
+
 import importlib.util
 import pathlib
 import sys
@@ -21,8 +22,16 @@ HEADER = (
 )
 
 
-def row(action="ALLOW", proto="TCP", src="192.168.0.5", dst="10.0.0.9", sport="51000", dport="8001", path="SEND",
-        stamp="2026-10-12 10:00:00"):
+def row(
+    action="ALLOW",
+    proto="TCP",
+    src="192.168.0.5",
+    dst="10.0.0.9",
+    sport="51000",
+    dport="8001",
+    path="SEND",
+    stamp="2026-10-12 10:00:00",
+):
     return f"{stamp} {action} {proto} {src} {dst} {sport} {dport} 0 - 0 0 0 - - - {path}\n"
 
 

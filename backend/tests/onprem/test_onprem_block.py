@@ -3,6 +3,7 @@
 - 다층 방어: 라우터를 거치지 않는 직접 호출(Deepgram/OpenAI 비전/ElevenLabs)도 네트워크 전에 거부
 - 롤백: ONPREM_MODE=false 면 이전 동작(키가 있으면 Deepgram 선시도, 실패 시 로컬 폴백) 그대로
 실행: DATABASE_URL, JWT_SECRET_KEY 더미 환경변수 필요(설정 객체 로딩용, 실제 접속 없음)."""
+
 import logging
 import urllib.error
 

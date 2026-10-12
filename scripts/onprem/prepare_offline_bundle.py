@@ -15,6 +15,7 @@
 
 종료코드: 0 = 전부 성공 / 1 = 일부 단계 실패(나머지는 계속 진행됨) / 2 = 사용법·입력 오류
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,10 +26,10 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_NAME = "manifest.json"
@@ -50,7 +51,12 @@ SMOLVLM_FILES = {  # 저장소 파일명 -> 프로젝트 코드가 찾는 파일
 WHISPER_REPO = "Systran/faster-whisper-small"  # faster-whisper 'small' 모델의 저장소(코드: stt_engine.py)
 MINILM_REPO = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 코드: rag_engine.py
 PIPER_VOICE = "ko_KR-kss-medium"  # 코드: tts_engine.py
-DOCKER_IMAGES = ("pgvector/pgvector:pg16", "redis:7-alpine", "python:3.13-slim", "node:20-slim")  # compose + code_sandbox.py
+DOCKER_IMAGES = (
+    "pgvector/pgvector:pg16",
+    "redis:7-alpine",
+    "python:3.13-slim",
+    "node:20-slim",
+)  # compose + code_sandbox.py
 HF_IGNORE = ["onnx/*", "openvino/*", "*.onnx", "*.msgpack", "*.h5", "tf_model*", "rust_model*"]  # 쓰지 않는 변환본
 
 
@@ -116,7 +122,10 @@ def step_pip(ctx: Ctx) -> str:
         ctx.sh(base + ["--only-binary=:all:"])
         note = "휠(wheel)만 사용"
     except RuntimeError:
-        ctx.log("  휠만으로는 받지 못한 패키지가 있어 소스 배포본 허용으로 다시 시도합니다(폐쇄망에서 빌드 도구가 필요할 수 있음).")
+        ctx.log(
+            "  휠만으로는 받지 못한 패키지가 있어 소스 배포본 허용으로 다시 시도합니다"
+            "(폐쇄망에서 빌드 도구가 필요할 수 있음)."
+        )
         ctx.sh(base)
         note = "일부 소스 배포본 포함(빌드 도구 필요 가능)"
     ctx.sh([ctx.python, "-m", "pip", "download", "pip", "setuptools", "wheel", "-d", str(wheels)])
@@ -280,8 +289,10 @@ def verify_bundle(out: Path, log: Callable[[str], None] = print) -> int:
     skipped_steps = [s for s in manifest.get("steps", []) if s.get("status") == "skipped"]
     log(f"번들 생성 {manifest.get('created')} / 만든 PC: 파이썬 {manifest.get('python')}, {manifest.get('platform')}")
     log(f"이 PC: 파이썬 {platform.python_version()}, {platform.system()} {platform.machine()}")
-    if (manifest.get("python", "").rsplit(".", 1)[0] != platform.python_version().rsplit(".", 1)[0]
-            or manifest.get("platform") != f"{platform.system()} {platform.machine()}"):
+    if (
+        manifest.get("python", "").rsplit(".", 1)[0] != platform.python_version().rsplit(".", 1)[0]
+        or manifest.get("platform") != f"{platform.system()} {platform.machine()}"
+    ):
         log("[주의] 번들을 만든 PC와 파이썬 버전/OS가 다릅니다. 파이썬 패키지(wheel)가 맞지 않을 수 있습니다.")
     log(f"파일 {len(entries)}개 확인: 누락 {len(missing)}, 크기 불일치 {len(bad_size)}, 해시 불일치 {len(bad_hash)}")
     for label, items in (("누락", missing), ("크기 불일치", bad_size), ("해시 불일치(손상)", bad_hash)):
@@ -310,8 +321,11 @@ def run_download(ctx: Ctx, only: set[str] | None, skip: set[str]) -> int:
     for step in STEPS:
         if (only and step.key not in only) or step.key in skip:
             kept = previous.get(step.key)
-            results.append(kept if kept and kept.get("status") == "ok"
-                           else {"key": step.key, "title": step.title, "status": "skipped", "note": "이번 실행에서 제외"})
+            results.append(
+                kept
+                if kept and kept.get("status") == "ok"
+                else {"key": step.key, "title": step.title, "status": "skipped", "note": "이번 실행에서 제외"}
+            )
             continue
         ctx.log(f"\n[{step.key}] {step.title}  (필요: {step.requires})")
         try:
@@ -331,7 +345,9 @@ def run_download(ctx: Ctx, only: set[str] | None, skip: set[str]) -> int:
     for r in results:
         ctx.log(f"  {r['status']:<8}{r['key']:<10}{r['title']}")
     if failed:
-        ctx.log("\n일부 단계가 실패했습니다. 실패한 단계만 `--only 단계이름` 으로 다시 실행하면 manifest 가 갱신됩니다.")
+        ctx.log(
+            "\n일부 단계가 실패했습니다. 실패한 단계만 `--only 단계이름` 으로 다시 실행하면 manifest 가 갱신됩니다."
+        )
     return 1 if failed else 0
 
 
@@ -365,7 +381,10 @@ def main(argv: list[str] | None = None, ctx_factory: Callable[[Path, bool], Ctx]
     skip = {k for k in args.skip.split(",") if k}
     unknown = (only | skip) - keys
     if unknown:
-        print(f"[오류] 알 수 없는 단계 이름: {', '.join(sorted(unknown))} (가능: {', '.join(sorted(keys))})", file=sys.stderr)
+        print(
+            f"[오류] 알 수 없는 단계 이름: {', '.join(sorted(unknown))} (가능: {', '.join(sorted(keys))})",
+            file=sys.stderr,
+        )
         return 2
     ctx = ctx_factory(out, args.dry_run) if ctx_factory else Ctx(out=out, dry_run=args.dry_run)
     return run_download(ctx, only or None, skip)

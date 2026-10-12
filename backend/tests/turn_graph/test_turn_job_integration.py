@@ -1,5 +1,6 @@
 """`process_turn_job`(Celery 태스크) 통합 테스트 — 실제 PostgreSQL(전체 마이그레이션 적용) + 그래프/기존 경로 양쪽.
 LLM 서버·TTS·Redis 발행만 가짜로 바꾼다. 사전 조건: `alembic upgrade head` 완료된 DB, DATABASE_URL, JWT_SECRET_KEY."""
+
 import uuid
 
 import pytest
@@ -30,16 +31,31 @@ def env(monkeypatch):
     uid, iid = uuid.uuid4(), uuid.uuid4()
     with SessionLocal() as db:
         db.execute(text("DELETE FROM questions"))
-        db.execute(text("INSERT INTO users (id,email,password_hash,role,name) VALUES (:i,:e,'x','candidate','테스트')"),
-                   {"i": uid, "e": f"tg-{uid}@example.com"})
-        db.execute(text("INSERT INTO interviews (id,candidate_id,status,report_status) "
-                        "VALUES (:i,:c,'live','none')"), {"i": iid, "c": uid})
-        q = Question(content="분산 트랜잭션 정합성은 어떻게 보장했나요?", category=QuestionCategory.technical,
-                     difficulty="hard", rubric_json={}, embedding=fake_embed("트랜잭션"), source=QuestionSource.bank)
+        db.execute(
+            text("INSERT INTO users (id,email,password_hash,role,name) VALUES (:i,:e,'x','candidate','테스트')"),
+            {"i": uid, "e": f"tg-{uid}@example.com"},
+        )
+        db.execute(
+            text("INSERT INTO interviews (id,candidate_id,status,report_status) VALUES (:i,:c,'live','none')"),
+            {"i": iid, "c": uid},
+        )
+        q = Question(
+            content="분산 트랜잭션 정합성은 어떻게 보장했나요?",
+            category=QuestionCategory.technical,
+            difficulty="hard",
+            rubric_json={},
+            embedding=fake_embed("트랜잭션"),
+            source=QuestionSource.bank,
+        )
         db.add(q)
         db.flush()
-        user_t = Transcript(interview_id=iid, turn_index=1, speaker="user", input_mode="text",
-                            content_text="트랜잭션 정합성 문제를 겪었습니다")
+        user_t = Transcript(
+            interview_id=iid,
+            turn_index=1,
+            speaker="user",
+            input_mode="text",
+            content_text="트랜잭션 정합성 문제를 겪었습니다",
+        )
         db.add(user_t)
         db.commit()
         ctx = {"iid": iid, "tid": user_t.id, "qid": q.id, "events": events}
@@ -111,6 +127,8 @@ def test_job04_graph_mode_is_default_and_session_state_skip(env, monkeypatch):
     with SessionLocal() as db:
         db.execute(text("UPDATE interviews SET status='completed' WHERE id=:i"), {"i": env["iid"]})
         db.commit()
-    monkeypatch.setattr(langchain_orchestrator, "generate_turn_via_langchain", lambda s, u: TurnLLMOutput(speak_text=GOOD))
+    monkeypatch.setattr(
+        langchain_orchestrator, "generate_turn_via_langchain", lambda s, u: TurnLLMOutput(speak_text=GOOD)
+    )
     _run(env)
-    assert _ai_row(env["iid"]) == [] and env["events"] == []   # 종료된 세션은 처리 스킵(기존 동작)
+    assert _ai_row(env["iid"]) == [] and env["events"] == []  # 종료된 세션은 처리 스킵(기존 동작)

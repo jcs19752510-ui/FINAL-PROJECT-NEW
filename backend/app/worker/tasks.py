@@ -32,14 +32,14 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.evaluation_report import EvaluationReport, OverallRecommendation, PassFailRecommendation
 from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
 from app.models.rubric_template import RubricTemplate
 from app.models.transcript import InputMode, Speaker, Transcript
-from app.core.config import settings
-from app.services import interview_prompts, rag_engine, turn_graph
+from app.services import conversation_memory, interview_prompts, rag_engine, turn_graph
 from app.services.celery_app import celery_app
 from app.services.llm_engine import (
     LlmGenerationError,
@@ -53,6 +53,7 @@ from app.services.llm_engine import (
 )
 from app.services.prompt_safety import log_persona_leak_detected
 from app.services.rubric_defaults import SYSTEM_DEFAULT_RUBRIC_TEMPLATE_ID
+from app.services.speech_rate import summarize_speech_rate
 from app.services.tts_engine import TtsSynthesisError, synthesize_speech_file
 from app.services.turn_numbering import insert_transcript_with_retry
 from app.services.ws_publisher import publish_ws_event
@@ -268,11 +269,11 @@ def process_turn_job(self, interview_id: str, transcript_id: str) -> None:
             .limit(_HISTORY_WINDOW)
         )
         history = list(reversed(db.scalars(history_stmt).all()))
-        history_lines = [
-            f"{'면접관' if t.speaker == Speaker.ai else '지원자'}: "
-            f"{_truncate_for_llm(t.content_text, _MAX_HISTORY_LINE_CHARS)}"
-            for t in history
-        ]
+        # LangChain 메모리(InMemoryChatMessageHistory)로 대화 이력을 구성한다 — 출력 줄 형식은 기존과 동일
+        # (app/services/conversation_memory.py, 원본 계획서 REQ-F-001 "LangChain 메모리").
+        history_lines = conversation_memory.history_lines(
+            history, _MAX_HISTORY_LINE_CHARS, _truncate_for_llm, window=_HISTORY_WINDOW
+        )
         latest_answer = _truncate_for_llm(user_transcript.content_text, _MAX_ANSWER_CHARS_FOR_LLM)
         user_message = (
             "[대화 이력]\n" + "\n".join(history_lines) +
@@ -652,10 +653,14 @@ def process_report_generation_job(self, interview_id: str) -> None:
         )
 
         details_json = output.details
+        # 발화 속도(원본 REQ-F-006): 사용자 음성 턴의 prosody_json을 서버가 직접 합산한다(LLM이 만든 값 아님).
+        speech_rate_summary = summarize_speech_rate([t.prosody_json for t in transcripts if t.speaker == Speaker.user])
+        if speech_rate_summary is not None:
+            details_json = {**details_json, "speech_rate": speech_rate_summary}
         if consistency_override_note:
             # 원본 LLM 출력을 덮어쓰지 않고 감사 추적용으로 별도 키에 남긴다 —
             # 09단계 보안검증·recruiter 감사 시 "서버가 왜 보정했는지" 확인 가능.
-            details_json = {**output.details, "_server_consistency_override": consistency_override_note}
+            details_json = {**details_json, "_server_consistency_override": consistency_override_note}
 
         _save_evaluation_report(
             db,

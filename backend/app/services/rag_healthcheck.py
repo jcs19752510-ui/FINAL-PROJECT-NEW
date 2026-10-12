@@ -39,7 +39,9 @@ def run() -> int:
         print("[2] 질문은행 건수:", {c.value: counts.get(c, 0) for c in QuestionCategory})
         for cat in QuestionCategory:
             if counts.get(cat, 0) < 1:
-                failures.append(f"질문은행 {cat.value} 카테고리가 비어 있음 — python -m app.services.seed_questions 실행 필요")
+                failures.append(
+                    f"질문은행 {cat.value} 카테고리가 비어 있음 — python -m app.services.seed_questions 실행 필요"
+                )
 
         if not failures:
             for q in SAMPLE_QUERIES:
@@ -56,7 +58,8 @@ def run() -> int:
                 if not hits:
                     failures.append(f"검색 결과 없음: {q}")
                 elif best < _FOLLOWUP_RAG_MIN_SIMILARITY:
-                    print(f"      (주의) 최고 유사도 {best:.3f} < 임계치 {_FOLLOWUP_RAG_MIN_SIMILARITY} — 후보로 채택되지 않음")
+                    print(f"      (주의) 최고 유사도 {best:.3f} < 임계치 {_FOLLOWUP_RAG_MIN_SIMILARITY}"
+                        " — 후보로 채택되지 않음")
     finally:
         db.close()
 

@@ -15,12 +15,12 @@
 
 종료코드: 0 = 확인 필요 없음 / 1 = 확인 필요 있음 / 2 = 입력 파일 없음 또는 형식 오류
 """
+
 from __future__ import annotations
 
 import argparse
 import ipaddress
 import sys
-from collections import defaultdict
 from dataclasses import dataclass, field
 
 DEFAULT_FIELDS = (
@@ -95,7 +95,7 @@ def analyze(lines, mail_rules: list[MailRule], internal_nets: list[ipaddress._Ba
             continue
         parts = line.split()
         try:
-            row = dict(zip(fields, parts))
+            row = dict(zip(fields, parts, strict=False))
             if len(parts) < len(fields):
                 raise ValueError("열 수 부족")
             path = row["path"].upper()
@@ -104,7 +104,7 @@ def analyze(lines, mail_rules: list[MailRule], internal_nets: list[ipaddress._Ba
             dst_ip = ipaddress.ip_address(row["dst-ip"])
             dst_port_text = row["dst-port"]
             dst_port = int(dst_port_text) if dst_port_text.isdigit() else None
-            stamp = f'{row["date"]} {row["time"]}'
+            stamp = f"{row['date']} {row['time']}"
             src = row["src-ip"]
         except (KeyError, ValueError):
             report.skipped_lines += 1
@@ -130,7 +130,8 @@ def analyze(lines, mail_rules: list[MailRule], internal_nets: list[ipaddress._Ba
 def render(report: Report) -> str:
     out = [
         "=== 방화벽 아웃바운드 점검 결과 ===",
-        f"읽은 로그 줄: {report.parsed_lines}건 (형식 오류로 건너뜀 {report.skipped_lines}건, 수신 방향 제외 {report.inbound_ignored}건)",
+        f"읽은 로그 줄: {report.parsed_lines}건 (형식 오류로 건너뜀 {report.skipped_lines}건, "
+        f"수신 방향 제외 {report.inbound_ignored}건)",
         f"  내부 통신:            {report.internal}건",
         f"  허용(메일, 점검 제외): {report.mail}건",
         f"  확인 필요(외부 접속):  {sum(f.count for f in report.review.values())}건 / 목적지 {len(report.review)}곳",
@@ -146,7 +147,9 @@ def render(report: Report) -> str:
                 f"{action:<6}{proto:<8}{dest:<40}{f.count:>6}  {f.first} ~ {f.last} / {', '.join(sorted(f.sources))}"
             )
         out.append("")
-        out.append("다음 할 일: 위 목적지를 사용하는 프로그램을 찾아(예: 해당 시각의 워커/백엔드 로그) 원인을 확인한다.")
+        out.append(
+            "다음 할 일: 위 목적지를 사용하는 프로그램을 찾아(예: 해당 시각의 워커/백엔드 로그) 원인을 확인한다."
+        )
     else:
         out.append("")
         out.append("결과: 메일 서버를 제외한 외부 접속 시도가 없습니다.")
@@ -156,10 +159,20 @@ def render(report: Report) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="방화벽 로그에서 사내망 밖으로 나가려던 접속을 찾는다.")
     parser.add_argument("logfile", help="pfirewall.log 경로")
-    parser.add_argument("--allow-mail", action="append", default=[], metavar="IP[/PREFIX][:PORT]",
-                        help="점검에서 제외할 메일 서버(여러 번 지정 가능). 예: 142.250.0.0/15:587")
-    parser.add_argument("--internal", action="append", default=[], metavar="CIDR",
-                        help="사설 대역이 아니지만 사내망으로 취급할 대역(여러 번 지정 가능)")
+    parser.add_argument(
+        "--allow-mail",
+        action="append",
+        default=[],
+        metavar="IP[/PREFIX][:PORT]",
+        help="점검에서 제외할 메일 서버(여러 번 지정 가능). 예: 142.250.0.0/15:587",
+    )
+    parser.add_argument(
+        "--internal",
+        action="append",
+        default=[],
+        metavar="CIDR",
+        help="사설 대역이 아니지만 사내망으로 취급할 대역(여러 번 지정 가능)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -173,16 +186,21 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.logfile, encoding="utf-8", errors="replace") as fh:
             report = analyze(fh, mail_rules, internal_nets)
     except OSError as exc:
-        print(f"[오류] 로그 파일을 읽을 수 없습니다: {exc}\n"
-              "방화벽 로그가 켜져 있는지, 관리자 권한으로 실행했는지 확인하세요.", file=sys.stderr)
+        print(
+            f"[오류] 로그 파일을 읽을 수 없습니다: {exc}\n"
+            "방화벽 로그가 켜져 있는지, 관리자 권한으로 실행했는지 확인하세요.",
+            file=sys.stderr,
+        )
         return EXIT_ERROR
 
     if report.parsed_lines == 0 and report.skipped_lines > 0:
         print("[오류] 읽을 수 있는 로그 줄이 없습니다. pfirewall.log 형식이 맞는지 확인하세요.", file=sys.stderr)
         return EXIT_ERROR
     if report.parsed_lines == 0:
-        print("[오류] 로그에 기록된 접속이 없습니다. 방화벽 로그(허용/차단)가 켜져 있고 면접을 진행한 뒤인지 확인하세요.",
-              file=sys.stderr)
+        print(
+            "[오류] 로그에 기록된 접속이 없습니다. 방화벽 로그(허용/차단)가 켜져 있고 면접을 진행한 뒤인지 확인하세요.",
+            file=sys.stderr,
+        )
         return EXIT_ERROR
 
     print(render(report))

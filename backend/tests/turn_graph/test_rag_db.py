@@ -3,6 +3,7 @@
 따라서 이 파일이 검증하는 것은 "검색/필터/MMR/임계치/시드/그래프 연동 로직"이고 "임베딩 모델의 의미 품질"이 아니다
 (후자는 `python -m app.services.rag_healthcheck` 를 모델이 있는 PC 에서 실행해 확인).
 사전 조건: DATABASE_URL 이 pgvector 확장이 설치된 DB 를 가리킬 것."""
+
 import numpy as np
 import pytest
 from sqlalchemy import text
@@ -42,8 +43,14 @@ def bank(monkeypatch):
 
 
 def _add(db, content, category=QuestionCategory.technical):
-    q = Question(content=content, category=category, difficulty="easy", rubric_json={},
-                 embedding=fake_embed(content), source=QuestionSource.bank)
+    q = Question(
+        content=content,
+        category=category,
+        difficulty="easy",
+        rubric_json={},
+        embedding=fake_embed(content),
+        source=QuestionSource.bank,
+    )
     db.add(q)
     db.commit()
     return q
@@ -67,7 +74,9 @@ def test_rag03_category_filter_opening_only():
     with SessionLocal() as db:
         _add(db, "간단히 자기소개 해 주세요.", QuestionCategory.opening)
         _add(db, "MSA 전환의 어려움은?")
-        got = rag_engine.search_similar_questions(db, "면접 시작 오프닝 자기소개", category=QuestionCategory.opening, top_k=1)
+        got = rag_engine.search_similar_questions(
+            db, "면접 시작 오프닝 자기소개", category=QuestionCategory.opening, top_k=1
+        )
         assert len(got) == 1 and got[0].category == QuestionCategory.opening
 
 
@@ -75,7 +84,9 @@ def test_rag04_exclude_opening_for_followups():
     with SessionLocal() as db:
         _add(db, "간단히 자기소개 해 주세요.", QuestionCategory.opening)
         _add(db, "자기소개 이후 협업 경험은?")
-        got = rag_engine.search_similar_questions(db, "자기소개", exclude_categories={QuestionCategory.opening}, top_k=3)
+        got = rag_engine.search_similar_questions(
+            db, "자기소개", exclude_categories={QuestionCategory.opening}, top_k=3
+        )
         assert all(q.category != QuestionCategory.opening for q in got) and len(got) == 1
 
 
@@ -89,8 +100,8 @@ def test_rag05_min_similarity_drops_unrelated():
 def test_rag06_mmr_prefers_diverse_second_pick():
     with SessionLocal() as db:
         _add(db, "MSA 전환의 어려움은?")
-        _add(db, "MSA 전환 후 운영 이슈는?")           # 첫 번째와 거의 동일 주제
-        _add(db, "MSA 와 트랜잭션 정합성은?")           # 질의와 부분 유사 + 다른 주제 포함
+        _add(db, "MSA 전환 후 운영 이슈는?")  # 첫 번째와 거의 동일 주제
+        _add(db, "MSA 와 트랜잭션 정합성은?")  # 질의와 부분 유사 + 다른 주제 포함
         got = rag_engine.search_similar_questions(db, "MSA", top_k=2)
         contents = [q.content for q in got]
         assert len(contents) == 2 and len(set(contents)) == 2
@@ -125,8 +136,13 @@ def test_rag09_graph_with_real_db_links_question_id_and_prompt():
             return TurnLLMOutput(speak_text="그 방식을 선택한 이유는 무엇이었나요?")
 
         res = turn_graph.run_followup_graph(
-            db, query_text="트랜잭션 문제를 겪었습니다", user_message="u", min_similarity=0.30,
-            on_persona_leak=lambda t: None, turn_fallback_text="폴백", generate=gen,
+            db,
+            query_text="트랜잭션 문제를 겪었습니다",
+            user_message="u",
+            min_similarity=0.30,
+            on_persona_leak=lambda t: None,
+            turn_fallback_text="폴백",
+            generate=gen,
         )
         assert [c.id for c in res.candidates] == [q.id] and q.content in seen["sys"]
         assert res.trace == ["retrieve", "generate", "validate"]
@@ -139,8 +155,12 @@ def test_rag10_graph_real_db_bank_fallback_uses_db_question():
     with SessionLocal() as db:
         q = _add(db, "CI/CD 파이프라인 개선 경험을 설명해 주세요.")
         res = turn_graph.run_followup_graph(
-            db, query_text="CI/CD 를 개선했습니다", user_message="u", min_similarity=0.30,
-            on_persona_leak=lambda t: None, turn_fallback_text="폴백",
+            db,
+            query_text="CI/CD 를 개선했습니다",
+            user_message="u",
+            min_similarity=0.30,
+            on_persona_leak=lambda t: None,
+            turn_fallback_text="폴백",
             generate=lambda s, u: TurnLLMOutput(speak_text="알겠습니다 감사합니다"),
         )
         assert res.used_bank_fallback and res.output.speak_text == q.content and res.generations == 2
@@ -167,9 +187,17 @@ def test_rag12_opening_selection_after_seed():
 
 def test_rag13_pgvector_dimension_enforced():
     with SessionLocal() as db:
-        db.add(Question(content="x", category=QuestionCategory.technical, difficulty="easy", rubric_json={},
-                        embedding=[0.1] * 10, source=QuestionSource.bank))
-        with pytest.raises(Exception):
+        db.add(
+            Question(
+                content="x",
+                category=QuestionCategory.technical,
+                difficulty="easy",
+                rubric_json={},
+                embedding=[0.1] * 10,
+                source=QuestionSource.bank,
+            )
+        )
+        with pytest.raises(Exception):  # noqa: B017 — DB 드라이버 예외 종류에 의존하지 않고 차원 위반이 거부되는지만 본다
             db.commit()
 
 
@@ -181,8 +209,12 @@ def test_rag14_graph_never_returns_opening_question_as_followup_candidate():
         _add(db, "간단히 자기소개 해 주세요.", QuestionCategory.opening)
         tech = _add(db, "협업 중 갈등 해결 경험을 말씀해 주세요.", QuestionCategory.behavioral)
         res = turn_graph.run_followup_graph(
-            db, query_text="자기소개", user_message="u", min_similarity=None,
-            on_persona_leak=lambda t: None, turn_fallback_text="폴백",
+            db,
+            query_text="자기소개",
+            user_message="u",
+            min_similarity=None,
+            on_persona_leak=lambda t: None,
+            turn_fallback_text="폴백",
             generate=lambda s, u: TurnLLMOutput(speak_text="그 경험은 어땠나요?"),
         )
         assert all(c.category != QuestionCategory.opening for c in res.candidates)

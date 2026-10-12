@@ -10,6 +10,8 @@
  */
 import Link from "next/link";
 import { useEffect, useState } from "react";
+
+import ReportCharts from "../../components/ReportCharts";
 import { useRouter } from "next/navigation";
 import {
   ApiError,
@@ -137,6 +139,8 @@ export default function RecruiterDashboardPage() {
         <h1 style={{ margin: 0 }}>지원자 리포트 목록</h1>
       </div>
       <p className={styles.subtitle}>우리 조직의 모든 지원자 면접 내역을 볼 수 있어요.</p>
+
+      {reports !== null && reports.length > 0 ? <ReportCharts reports={reports} statusLabels={STATUS_LABEL} /> : null}
 
       <div className={styles.filterRow}>
         <label htmlFor="status-filter" className={styles.filterLabel}>
