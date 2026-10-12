@@ -1,4 +1,6 @@
 """환경변수 기반 설정. 시크릿을 코드에 하드코딩하지 않는다 (게이트2 체크리스트)."""
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +36,9 @@ class Settings(BaseSettings):
     # 항상 타임아웃으로 실패한다(unit-37-test.md 기준선 실측). 리포트는 비동기 job이라
     # 여유를 둔다.
     llm_report_timeout_seconds: int = 300
+    # 2026-10-12(사용자 지시): 면접장 꼬리질문 처리 경로. "graph" = RAG+LangChain+LangGraph
+    # (app/services/turn_graph.py), "legacy" = 기존 코드 경로(롤백용). 그 외 값은 기동 시 거부.
+    llm_orchestration: Literal["graph", "legacy"] = "graph"
     # unit-32/DEC-057(2026-09-23, 사용자 제공 키로 실측 검증): 벤더 어댑터는
     # `app/services/stt_adapter_deepgram.py`/`tts_adapter_elevenlabs.py`/
     # `whiteboard_vision.py`에 함수로만 존재하고 아직 어떤 API 엔드포인트에도

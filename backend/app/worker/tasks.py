@@ -38,7 +38,8 @@ from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
 from app.models.rubric_template import RubricTemplate
 from app.models.transcript import InputMode, Speaker, Transcript
-from app.services import interview_prompts, rag_engine
+from app.core.config import settings
+from app.services import interview_prompts, rag_engine, turn_graph
 from app.services.celery_app import celery_app
 from app.services.llm_engine import (
     LlmGenerationError,
@@ -278,20 +279,39 @@ def process_turn_job(self, interview_id: str, transcript_id: str) -> None:
             f"\n\n[지원자의 최신 답변]\n{latest_answer}"
         )
 
-        rag_candidates = rag_engine.search_similar_questions(
-            db,
-            query_text=user_transcript.content_text,
-            exclude_categories={QuestionCategory.opening},
-            top_k=3,
-            min_similarity=_FOLLOWUP_RAG_MIN_SIMILARITY,
-        )
+        if settings.llm_orchestration == "graph":
+            # RAG + LangChain + LangGraph 경로(app/services/turn_graph.py) — 기존 분기
+            # (검색 → 생성 → 검증 → 재시도 1회 → 질문은행 폴백 / LLM 실패 시 안전 기본값)와 동일 정책.
+            graph_result = turn_graph.run_followup_graph(
+                db,
+                query_text=user_transcript.content_text,
+                user_message=user_message,
+                min_similarity=_FOLLOWUP_RAG_MIN_SIMILARITY,
+                on_persona_leak=lambda text: log_persona_leak_detected(str(interview_uuid), text),
+                turn_fallback_text=_TURN_FALLBACK_TEXT,
+            )
+            rag_candidates = graph_result.candidates
+            output = graph_result.output
+            logger.info(
+                "followup_graph 완료 interview=%s trace=%s generations=%d bank_fallback=%s llm_failed=%s",
+                interview_id, graph_result.trace, graph_result.generations,
+                graph_result.used_bank_fallback, graph_result.llm_failed,
+            )
+        else:
+            rag_candidates = rag_engine.search_similar_questions(
+                db,
+                query_text=user_transcript.content_text,
+                exclude_categories={QuestionCategory.opening},
+                top_k=3,
+                min_similarity=_FOLLOWUP_RAG_MIN_SIMILARITY,
+            )
 
-        try:
-            system_prompt = interview_prompts.build_followup_system_prompt(rag_candidates)
-            output = _generate_validated_followup(interview_uuid, system_prompt, user_message, rag_candidates)
-        except LlmGenerationError:
-            logger.warning("turn LLM 생성 실패 — 안전 기본값 폴백", exc_info=True)
-            output = TurnLLMOutput(speak_text=_TURN_FALLBACK_TEXT, control="next_question")
+            try:
+                system_prompt = interview_prompts.build_followup_system_prompt(rag_candidates)
+                output = _generate_validated_followup(interview_uuid, system_prompt, user_message, rag_candidates)
+            except LlmGenerationError:
+                logger.warning("turn LLM 생성 실패 — 안전 기본값 폴백", exc_info=True)
+                output = TurnLLMOutput(speak_text=_TURN_FALLBACK_TEXT, control="next_question")
 
         _publish_stage(interview_uuid, job_id, "tts")
         audio_url = _synthesize_or_none(output.speak_text)

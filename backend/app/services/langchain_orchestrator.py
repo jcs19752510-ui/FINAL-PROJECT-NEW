@@ -25,6 +25,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.services.llm_engine import (
     _SERVER_PORT,
+    LlmGenerationError,
+    TurnLLMOutput,
     _ensure_server_running,  # 의도적 재사용, 모듈 docstring 참고
 )
 
@@ -63,9 +65,12 @@ def _get_chat_model() -> ChatOpenAI:
         api_key="local-llama-server-no-auth-required",  # 로컬 서버는 인증 불필요, SDK 필수 필드라 더미 채움
         model="local-gguf",  # llama-server는 이 값을 무시하지만 OpenAI 클라이언트 스펙상 필수
         temperature=0.6,
-        max_tokens=300,
         timeout=_GENERATION_TIMEOUT_SECONDS,
+        # ChatOpenAI 0.2.x는 `max_tokens=`를 `max_completion_tokens`로 바꿔 보낸다(실측, tests/turn_graph
+        # TC-16). llama-server 빌드에 따라 이 키를 무시하면 응답 길이 상한이 풀리므로, 기존
+        # llm_engine.py와 같은 `max_tokens` 키를 `extra_body`로 요청 본문에 직접 넣는다.
         model_kwargs={"response_format": {"type": "json_object"}},
+        extra_body={"max_tokens": 300},
     )
 
 
@@ -94,3 +99,30 @@ def generate_followup_via_langchain(system_prompt: str, user_message: str) -> La
             raise LangChainOrchestrationError("LangChain 오케스트레이션 호출에 실패했습니다.") from exc
 
     raise LangChainOrchestrationError("구조화 출력 파싱에 반복 실패했습니다.") from last_error
+
+
+def generate_turn_via_langchain(system_prompt: str, user_message: str) -> TurnLLMOutput:
+    """운영 경로용(2026-10-12, `turn_graph`의 생성 노드). `llm_engine.generate_turn_response()`와
+    동일한 계약을 LangChain `ChatOpenAI`로 구현한다 — 반환형은 운영 파이프라인이 쓰는
+    `TurnLLMOutput` 전체 스키마이고, 실패는 전부 `LlmGenerationError`로 승격한다
+    (호출부의 기존 안전 기본값 폴백이 그대로 동작하도록). 파싱 실패 시 최대 1회 재시도
+    (총 2회) 정책도 `generate_turn_response`와 같다.
+    """
+    llm = _get_chat_model()  # 서버 기동 실패는 LlmGenerationError 그대로 전파
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            response = llm.invoke(messages)
+        except Exception as exc:  # noqa: BLE001 — langchain_openai/httpx 하위 예외를 단일 계약으로 승격
+            raise LlmGenerationError("LangChain LLM 호출에 실패했습니다.") from exc
+        try:
+            content = response.content
+            if not isinstance(content, str):
+                raise ValueError("LLM 응답 content가 문자열이 아닙니다.")
+            return TurnLLMOutput.model_validate_json(content)
+        except (ValidationError, ValueError) as exc:  # JSONDecodeError는 ValueError의 하위 클래스
+            last_error = exc
+            logger.warning("LangChain 구조화 출력 파싱 실패(시도 %d/2): %s", attempt + 1, exc)
+    raise LlmGenerationError("LLM이 유효한 구조화 출력을 생성하지 못했습니다.") from last_error
