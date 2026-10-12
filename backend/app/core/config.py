@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # 2026-10-12(사용자 지시): 면접장 꼬리질문 처리 경로. "graph" = RAG+LangChain+LangGraph
     # (app/services/turn_graph.py), "legacy" = 기존 코드 경로(롤백용). 그 외 값은 기동 시 거부.
     llm_orchestration: Literal["graph", "legacy"] = "graph"
+    # 2026-10-12(사용자 지시): 온프리미스 모드. True(기본)이면 지원자 음성·화상·텍스트를 외부 AI
+    # 서비스(Deepgram STT, ElevenLabs TTS, OpenAI 비전)로 보내는 코드 경로를 전부 차단하고 로컬 모델
+    # (faster-whisper 등)만 쓴다 — 해당 API 키가 .env/환경변수에 남아 있어도 차단된다.
+    # False로 두면 이전 동작(키가 있으면 Deepgram 선시도)으로 돌아간다(롤백용).
+    # 메일(SMTP) 발송은 지원자에게 전달해야 하는 외부 통신이라 이 모드의 차단 대상이 아니다.
+    onprem_mode: bool = True
     # unit-32/DEC-057(2026-09-23, 사용자 제공 키로 실측 검증): 벤더 어댑터는
     # `app/services/stt_adapter_deepgram.py`/`tts_adapter_elevenlabs.py`/
     # `whiteboard_vision.py`에 함수로만 존재하고 아직 어떤 API 엔드포인트에도

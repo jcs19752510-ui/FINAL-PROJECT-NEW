@@ -19,6 +19,7 @@ import logging
 import urllib.error
 import urllib.request
 
+from app.core.config import settings
 from app.services.tts_engine import ITTSEngine, TtsSynthesisError
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,8 @@ class ElevenLabsTTSEngine(ITTSEngine):
         self._voice_id = voice_id
 
     def synthesize(self, text: str) -> bytes:
+        if settings.onprem_mode:  # 다층 방어: 외부 음성합성(ElevenLabs) 호출을 네트워크 전에 차단
+            raise TtsSynthesisError("온프리미스 모드에서는 외부 음성합성(ElevenLabs) 호출이 차단됩니다.")
         payload = json.dumps(
             {
                 "text": text,

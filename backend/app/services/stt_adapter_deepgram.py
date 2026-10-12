@@ -17,6 +17,7 @@ import logging
 import urllib.error
 import urllib.request
 
+from app.core.config import settings
 from app.services.stt_engine import SttTranscriptionError
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ def transcribe_audio_deepgram(audio_bytes: bytes, api_key: str, content_type: st
     MIME 타입을 그대로 전달해야 한다(Deepgram은 Content-Type으로 오디오 포맷을
     추론). 값이 없으면 기본값 `audio/wav`로 폴백한다.
     """
+    if settings.onprem_mode:  # 다층 방어: 라우터를 거치지 않는 직접 호출도 네트워크 전에 차단
+        raise SttTranscriptionError("온프리미스 모드에서는 외부 음성인식(Deepgram) 호출이 차단됩니다.")
     request = urllib.request.Request(
         _API_URL + _QUERY_PARAMS,
         data=audio_bytes,

@@ -37,6 +37,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 # unit-35-note.md §5-1 후속 확인 필요 항목(2026-09-28 실측 대조 완료): 04-ux-design
@@ -105,6 +107,8 @@ def analyze_diagram_with_vision(png_bytes: bytes, api_key: str) -> str:
     """OpenAI GPT-4V(`gpt-4o` 등 비전 지원 모델) Chat Completions API를 호출한다.
     **미검증** — API 키가 없어 실제로 호출해본 적 없음(모듈 docstring 참고).
     """
+    if settings.onprem_mode:  # 다층 방어: 외부 비전 API(OpenAI) 호출을 네트워크 전에 차단
+        raise VisionAnalysisError("온프리미스 모드에서는 외부 비전 분석(OpenAI) 호출이 차단됩니다.")
     image_b64 = base64.b64encode(png_bytes).decode("ascii")
     payload = json.dumps(
         {
