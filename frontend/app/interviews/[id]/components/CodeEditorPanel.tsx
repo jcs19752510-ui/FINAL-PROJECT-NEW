@@ -20,6 +20,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
+import "../../../../lib/monacoLocal"; // Monaco 를 CDN 대신 /monaco/vs 에서 로드(폐쇄망 대응)
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 

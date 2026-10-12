@@ -37,6 +37,8 @@ backend/celerybeat-schedule*
 # 프론트엔드
 frontend/node_modules/
 frontend/.next/
+# 2026-10-12: Monaco 본체 복사본(재생성 가능, scripts/copy-monaco.mjs)
+frontend/public/monaco/
 frontend/.env.local
 frontend/npm-debug.log*
 # unit-22(DEC-030): Playwright 산출물
