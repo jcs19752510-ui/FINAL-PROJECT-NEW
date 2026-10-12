@@ -140,13 +140,18 @@ export function submitTextTurn(
 // (line 19) 이 함수는 그 헬퍼를 쓰지 않고 fetch를 직접 호출해 브라우저가 FormData의
 // boundary를 포함한 Content-Type을 스스로 설정하게 한다. DEC-023: `biometric_voice`
 // 동의가 없거나 철회된 상태면 서버가 `403 CONSENT_REQUIRED_VOICE`를 반환한다.
+export type InterruptReason = "too_long" | "off_topic";
+
 export async function submitVoiceTurn(
   accessToken: string,
   interviewId: string,
   audioBlob: Blob,
+  // REQ-F-003: AI 가 답변 도중 정중히 개입해 제출을 끊은 경우에만 사유를 함께 보낸다.
+  interruptReason?: InterruptReason,
 ): Promise<TurnAcceptedResponse> {
   const formData = new FormData();
   formData.append("audio", audioBlob, "answer.webm");
+  if (interruptReason) formData.append("interrupt_reason", interruptReason);
 
   const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/turns`, {
     method: "POST",
@@ -169,13 +174,41 @@ export async function submitVoiceTurn(
 // unit-36(STT 실시간 스트리밍 미리보기, 2026-09-23 사용자 승인): 답변을 녹음하는
 // "도중"에 짧은 오디오 조각을 보내 인식 텍스트 미리보기만 받는다 — 최종 제출
 // (`submitVoiceTurn`)과 별개 엔드포인트라 실패해도 최종 제출에는 영향 없다.
+// REQ-F-003: 응답이 interrupt/low_streak 로 확장됨(구버전 서버 호환을 위해 둘 다 옵셔널).
+export interface VoicePreviewResponse {
+  text: string;
+  interrupt?: { should_interrupt: boolean; reason: InterruptReason | null } | null;
+  low_streak?: number;
+}
+
+export interface VoicePreviewContext {
+  /** 녹음 시작 후 경과 초. */
+  elapsedSeconds?: number;
+  /** 지금까지 누적된 미리보기 텍스트(최대 4000자, 초과 시 최근 부분 유지). */
+  answerSoFar?: string;
+  /** 직전 응답의 low_streak 를 그대로 되돌려 보낸다(없으면 0). */
+  lowStreak?: number;
+}
+
+export const PREVIEW_ANSWER_SO_FAR_MAX = 4000;
+
 export async function submitVoicePreview(
   accessToken: string,
   interviewId: string,
   audioBlob: Blob,
-): Promise<{ text: string }> {
+  context?: VoicePreviewContext,
+): Promise<VoicePreviewResponse> {
   const formData = new FormData();
   formData.append("audio", audioBlob, "preview.webm");
+  if (context) {
+    if (context.elapsedSeconds !== undefined && Number.isFinite(context.elapsedSeconds)) {
+      formData.append("elapsed_seconds", String(Math.max(0, Math.round(context.elapsedSeconds))));
+    }
+    if (context.answerSoFar !== undefined) {
+      formData.append("answer_so_far", context.answerSoFar.slice(-PREVIEW_ANSWER_SO_FAR_MAX));
+    }
+    formData.append("low_streak", String(Math.max(0, Math.trunc(context.lowStreak ?? 0))));
+  }
 
   const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/turns/preview`, {
     method: "POST",
@@ -192,7 +225,14 @@ export async function submitVoicePreview(
       body?.detail ?? "요청 처리 중 오류가 발생했습니다.",
     );
   }
-  return res.json() as Promise<{ text: string }>;
+  return res.json() as Promise<VoicePreviewResponse>;
+}
+
+// turn_result.audio_url 은 `/media/xxx.wav` 같은 상대 경로(백엔드 origin, `/api/v1` 프리픽스 없음)다.
+export function mediaUrl(audioUrl: string): string {
+  if (/^https?:\/\//i.test(audioUrl)) return audioUrl;
+  const origin = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
+  return `${origin}${audioUrl.startsWith("/") ? "" : "/"}${audioUrl}`;
 }
 
 // 03-system-design.md §4.3: WS는 `/api/v1` 프리픽스 없이 `/ws/interviews/{id}`이며,

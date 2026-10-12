@@ -32,6 +32,7 @@ import Link from "next/link";
 import {
   ApiError,
   type ConsentOut,
+  type InterruptReason,
   type InterviewDetailOut,
   type TranscriptOut,
   createConsent,
@@ -40,12 +41,21 @@ import {
   interviewWsUrl,
   listMyConsents,
   listTranscripts,
+  mediaUrl,
   readAccessToken,
   submitTextTurn,
   submitVoicePreview,
   submitVoiceTurn,
 } from "@/lib/api";
 import { useMediaQuery } from "@/lib/useMediaQuery";
+import {
+  AUTO_SUBMIT_HANGOVER_MS,
+  MIC_CONSTRAINTS,
+  createOnceGate,
+  readAutoSubmitPref,
+  useTurnTaking,
+  writeAutoSubmitPref,
+} from "@/lib/useTurnTaking";
 import HomeLink from "@/components/HomeLink";
 import WebcamPreview from "@/components/WebcamPreview";
 import InterviewSidePanel, { SIDE_PANEL_LABEL, type SidePanelId } from "./components/InterviewSidePanel";
@@ -81,6 +91,8 @@ type WsEvent =
 // 명시된 값이 아님 — 이번 유닛의 그레이스풀 디그레이드 구현 세부사항).
 const AI_WAIT_TIMEOUT_MS = 12_000;
 const MAX_TEXT_LENGTH = 4000;
+// REQ-F-003: 개입 안내 배너 노출 시간.
+const INTERRUPT_NOTICE_MS = 6_000;
 
 // 사용자 요청(2026-09-21): LLM이 스스로 면접을 끝맺지 못해(control:"end_interview"가
 // 신뢰성 있게 오지 않음) 무한정 이어지는 문제 대응. backend
@@ -131,6 +143,11 @@ export default function InterviewRoomPage() {
   // 스트림에서 병행 실행한다 — 최종 제출 경로(오늘 실제 장애가 있었던 코드)는
   // 건드리지 않는다.
   const [livePreviewText, setLivePreviewText] = useState("");
+  // REQ-F-003: 침묵 자동 제출 토글(localStorage 기억) / AI 개입 안내 배너.
+  const [autoSubmit, setAutoSubmit] = useState<boolean>(() =>
+    typeof window === "undefined" ? true : readAutoSubmitPref(),
+  );
+  const [interruptNotice, setInterruptNotice] = useState<InterruptReason | "generic" | null>(null);
 
   // 보조 패널(unit-20): activePanel=현재 노출 패널(null=채팅만), mountedPanels=한 번이라도
   // 열린 패널(닫아도 unmount하지 않아 로컬 편집 내용을 보존, InterviewSidePanel 참고).
@@ -157,6 +174,24 @@ export default function InterviewRoomPage() {
   const maxRecordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewActiveRef = useRef(false);
   const previewRecorderRef = useRef<MediaRecorder | null>(null);
+  // REQ-F-003 refs: 미리보기 컨텍스트, 개입 1회 게이트, AI 음성 재생/바지인 감시.
+  const livePreviewTextRef = useRef("");
+  const lowStreakRef = useRef(0);
+  const recordStartRef = useRef(0);
+  const interruptGateRef = useRef(createOnceGate());
+  const pendingInterruptReasonRef = useRef<InterruptReason | null>(null);
+  const interruptNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiAudioRef = useRef<HTMLAudioElement | null>(null);
+  const bargeStreamRef = useRef<MediaStream | null>(null);
+  const micGrantedRef = useRef(false);
+  const playAiAudioRef = useRef<(url: string) => void>(() => {});
+
+  const turnTaking = useTurnTaking({
+    autoSubmit,
+    hangoverMs: AUTO_SUBMIT_HANGOVER_MS,
+    onAutoSubmit: () => stopRecording(),
+    onBargeIn: () => handleBargeIn(),
+  });
 
   useEffect(() => {
     if (!accessToken) {
@@ -266,6 +301,7 @@ export default function InterviewRoomPage() {
         ]);
         // 04-ux-design §1.1 6-e: switch_to_coding이면 코드 에디터 패널을 노출한다.
         // 화이트보드용 제어 신호는 03-design §4.3 enum에 없어 사용자가 탭으로만 연다.
+        if (data.audio_url) playAiAudioRef.current(data.audio_url);
         if (data.control?.action === "switch_to_coding" && interview.status === "live") {
           openSidePanel("code");
         }
@@ -543,6 +579,9 @@ export default function InterviewRoomPage() {
     stopRecordingTimers();
     stopPreviewLoop();
     releaseMicStream();
+    stopAiAudio();
+    releaseBargeStream();
+    if (interruptNoticeTimerRef.current) clearTimeout(interruptNoticeTimerRef.current);
   }, []);
 
   // unit-36: 최종 녹음(mediaRecorderRef)과 별개의 MediaRecorder를 같은 스트림에서
@@ -577,9 +616,22 @@ export default function InterviewRoomPage() {
       void (async () => {
         if (wasActive && accessToken && blob.size > 0) {
           try {
-            const result = await submitVoicePreview(accessToken, interviewId, blob);
-            if (result.text && previewActiveRef.current) {
-              setLivePreviewText((prev) => (prev ? `${prev} ${result.text}` : result.text));
+            const result = await submitVoicePreview(accessToken, interviewId, blob, {
+              elapsedSeconds: (Date.now() - recordStartRef.current) / 1000,
+              answerSoFar: livePreviewTextRef.current,
+              lowStreak: lowStreakRef.current,
+            });
+            if (previewActiveRef.current) {
+              if (typeof result.low_streak === "number") lowStreakRef.current = result.low_streak;
+              if (result.text) {
+                const next = livePreviewTextRef.current ? `${livePreviewTextRef.current} ${result.text}` : result.text;
+                livePreviewTextRef.current = next;
+                setLivePreviewText(next);
+              }
+              // REQ-F-003: AI 정중 개입 — 같은 녹음에서 한 번만 처리.
+              if (result.interrupt?.should_interrupt && interruptGateRef.current.tryOpen()) {
+                handleInterrupt(result.interrupt.reason);
+              }
             }
           } catch {
             // 미리보기 실패는 조용히 무시 — 다음 세그먼트에서 다시 시도.
@@ -596,15 +648,111 @@ export default function InterviewRoomPage() {
 
   function startPreviewLoop() {
     previewActiveRef.current = true;
+    livePreviewTextRef.current = "";
     setLivePreviewText("");
     runPreviewCycle();
   }
 
-  async function startRecording() {
-    setVoiceError(null);
+  // --- REQ-F-003: AI 음성 재생 / 바지인 / 개입 ---
+
+  function stopAiAudio() {
+    const audio = aiAudioRef.current;
+    aiAudioRef.current = null;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+    }
+  }
+
+  function releaseBargeStream() {
+    bargeStreamRef.current?.getTracks().forEach((track) => track.stop());
+    bargeStreamRef.current = null;
+  }
+
+  // 재생이 끝났거나 끊겼을 때 바지인 감시를 정리한다(녹음으로 넘어간 스트림은 건드리지 않음).
+  function endPlaybackMonitor() {
+    turnTaking.stop();
+    releaseBargeStream();
+  }
+
+  async function playAiAudio(url: string) {
+    // 녹음 중에 도착한 응답은 재생하지 않는다(녹음용 VAD·스트림을 건드리지 않기 위해).
+    if (mediaRecorderRef.current?.state === "recording") return;
+    stopAiAudio();
+    endPlaybackMonitor();
+    const audio = new Audio(mediaUrl(url));
+    aiAudioRef.current = audio;
+    const finish = () => {
+      if (aiAudioRef.current === audio) {
+        aiAudioRef.current = null;
+        endPlaybackMonitor();
+      }
+    };
+    audio.onended = finish;
+    audio.onerror = finish;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      await audio.play();
+    } catch {
+      finish(); // 자동재생 차단 등 — 텍스트는 이미 표시되어 있다.
+      return;
+    }
+    // 바지인 감시는 이미 마이크 권한을 받은 적이 있을 때만(예상치 못한 권한 팝업 방지).
+    if (!micGrantedRef.current || hasVoiceConsent !== true || !canSubmitTurnNow() || recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+      if (aiAudioRef.current !== audio) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      bargeStreamRef.current = stream;
+      turnTaking.watchPlayback(stream);
+    } catch {
+      // 마이크를 못 잡으면 바지인만 비활성 — 재생은 계속.
+    }
+  }
+  useEffect(() => {
+    playAiAudioRef.current = (url) => void playAiAudio(url);
+  });
+
+  function canSubmitTurnNow() {
+    return interview?.status === "live" && !turnLimitReached && canUseMic && !voiceUploading;
+  }
+
+  function handleBargeIn() {
+    const stream = bargeStreamRef.current;
+    if (!stream || !canSubmitTurnNow()) return;
+    bargeStreamRef.current = null;
+    stopAiAudio(); // 재생 즉시 중지
+    void startRecording(stream);
+  }
+
+  function handleInterrupt(reason: InterruptReason | null) {
+    pendingInterruptReasonRef.current = reason;
+    setInterruptNotice(reason ?? "generic");
+    if (interruptNoticeTimerRef.current) clearTimeout(interruptNoticeTimerRef.current);
+    interruptNoticeTimerRef.current = setTimeout(() => setInterruptNotice(null), INTERRUPT_NOTICE_MS);
+    stopRecording();
+  }
+
+  function handleAutoSubmitToggle(on: boolean) {
+    setAutoSubmit(on);
+    writeAutoSubmitPref(on);
+  }
+
+  // existingStream: 바지인으로 이미 열려 있는 마이크 스트림(감시 중이던 VAD 를 이어 쓴다).
+  async function startRecording(existingStream?: MediaStream) {
+    setVoiceError(null);
+    stopAiAudio();
+    if (!existingStream) endPlaybackMonitor();
+    try {
+      const stream = existingStream ?? (await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS));
+      micGrantedRef.current = true;
       mediaStreamRef.current = stream;
+      interruptGateRef.current.reset();
+      pendingInterruptReasonRef.current = null;
+      lowStreakRef.current = 0;
+      recordStartRef.current = Date.now();
       const recorder = new MediaRecorder(stream);
       audioChunksRef.current = [];
       recorder.ondataavailable = (event) => {
@@ -613,6 +761,7 @@ export default function InterviewRoomPage() {
       recorder.onstop = () => {
         stopRecordingTimers();
         stopPreviewLoop();
+        turnTaking.stop();
         releaseMicStream();
         setLivePreviewText("");
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
@@ -629,14 +778,18 @@ export default function InterviewRoomPage() {
         mediaRecorderRef.current?.stop();
       }, MAX_RECORDING_MS);
       startPreviewLoop();
+      if (existingStream) turnTaking.switchToRecording();
+      else turnTaking.watchRecording(stream);
     } catch {
+      existingStream?.getTracks().forEach((t) => t.stop());
       // 04-ux-design [C-06] "마이크 권한 없음": 음성 버튼 비활성 + 텍스트 입력만 강조.
       setVoiceError("마이크 권한이 거부되었거나 사용할 수 없습니다. 텍스트로 답변해주세요.");
     }
   }
 
   function stopRecording() {
-    mediaRecorderRef.current?.stop();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
     setRecording(false);
   }
 
@@ -670,8 +823,10 @@ export default function InterviewRoomPage() {
     setVoiceUploading(true);
     setVoiceError(null);
     setSubmitError(null);
+    const interruptReason = pendingInterruptReasonRef.current ?? undefined;
+    pendingInterruptReasonRef.current = null;
     try {
-      const res = await submitVoiceTurn(accessToken, interviewId, blob);
+      const res = await submitVoiceTurn(accessToken, interviewId, blob, interruptReason);
       // 서버가 STT로 실제 변환한 텍스트를 반영하기 위해 이력을 다시 조회한다
       // (음성은 텍스트와 달리 클라이언트가 인식 결과를 미리 알 수 없다, 모듈 상단 설명 참고).
       const transcripts = await listTranscripts(accessToken, interviewId);
@@ -852,6 +1007,14 @@ export default function InterviewRoomPage() {
             <div ref={timelineEndRef} />
           </div>
 
+          {interruptNotice && (
+            <div className="banner-info" role="status">
+              면접관이 정중하게 개입합니다
+              {interruptNotice === "too_long" && " (답변이 길어졌어요)"}
+              {interruptNotice === "off_topic" && " (주제에서 벗어났어요)"}
+            </div>
+          )}
+
           {submitError && <div className="banner-error">{submitError}</div>}
           {voiceError && <div className="banner-error">{voiceError}</div>}
 
@@ -895,6 +1058,16 @@ export default function InterviewRoomPage() {
                 {inputText.length}/{MAX_TEXT_LENGTH}
               </span>
               {micSupported && (
+                <label className="char-counter">
+                  <input
+                    type="checkbox"
+                    checked={autoSubmit}
+                    onChange={(e) => handleAutoSubmitToggle(e.target.checked)}
+                  />{" "}
+                  말을 멈추면 자동 제출
+                </label>
+              )}
+              {micSupported && (
                 <button
                   type="button"
                   className={`mic-button ${recording ? "mic-button--recording" : ""}`}
@@ -917,6 +1090,9 @@ export default function InterviewRoomPage() {
                 {submitting ? "전송 중..." : "전송"}
               </button>
             </div>
+            {micSupported && (
+              <p className="char-counter">헤드셋 사용을 권장합니다 (스피커 소리가 마이크에 섞이면 끼어들기가 오인식될 수 있어요).</p>
+            )}
           </form>
         </div>
 
