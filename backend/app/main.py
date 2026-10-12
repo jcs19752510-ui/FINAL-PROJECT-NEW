@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -6,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.code_submissions import problems_router as coding_problems_router
 from app.api.v1.code_submissions import router as code_submissions_router
 from app.api.v1.consents import router as consents_router
 from app.api.v1.interviews import router as interviews_router
@@ -54,12 +56,25 @@ async def _run_prosody_warmup() -> None:
     await loop.run_in_executor(None, warmup_prosody_engine)
 
 
+def _seed_coding_problems() -> None:
+    """기본 코딩 문제를 한 번만 등록한다(멱등). 실패해도 서버 기동은 막지 않는다."""
+    try:
+        from app.db.session import SessionLocal
+        from app.services.coding_problem_seed import seed_if_empty
+
+        with SessionLocal() as db:
+            seed_if_empty(db)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("코딩 문제 시드 실패 — 건너뜀", exc_info=True)
+
+
 @app.on_event("startup")
 async def _start_background_tasks() -> None:
     global _relay_task, _watchdog_task, _prosody_warmup_task
     _relay_task = asyncio.create_task(redis_relay_loop())
     _watchdog_task = asyncio.create_task(job_watchdog_loop())
     _prosody_warmup_task = asyncio.create_task(_run_prosody_warmup())
+    await asyncio.get_event_loop().run_in_executor(None, _seed_coding_problems)
 
 
 @app.on_event("shutdown")
@@ -107,6 +122,7 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(code_submissions_router, prefix="/api/v1")
+app.include_router(coding_problems_router, prefix="/api/v1")
 app.include_router(consents_router, prefix="/api/v1")
 app.include_router(interviews_router, prefix="/api/v1")
 app.include_router(ops_router, prefix="/api/v1")

@@ -63,6 +63,8 @@ class RecruiterReportDetailOut(BaseModel):
     # v15(03-system-design v4 §4.6 (5), unit-37) — [R-02]도 [C-11]과 같은 루브릭
     # 섹션을 쓴다(04-ux-design.md [C-11]/[R-02] 공통 명세).
     rubric: RubricOut | None = None
+    # 원본 REQ-F-004: 가장 최근 분석된 코드 제출물의 AI 분석(없으면 None).
+    code_analysis: dict | None = None
     # 최종 합격/불합격(2026-10-07) — 미처리면 전부 None.
     final_decision: Literal["accepted", "rejected"] | None = None
     final_decision_note: str | None = None

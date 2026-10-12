@@ -315,6 +315,8 @@ export interface RecruiterReportDetailOut extends RecruiterInterviewListItemOut 
   summary_text: string | null;
   details: Record<string, unknown> | null;
   rubric: RubricReportOut | null;
+  // REQ-F-004: 라이브 코딩 AI 분석. 백엔드가 아직 안 내려주거나 코드 제출이 없으면 없을 수 있다.
+  code_analysis?: CodeAnalysis | null;
 }
 
 // v15(03-system-design v4 §4.6 (5), unit-37, REQ-010/012): 루브릭 항목별 채점.
@@ -804,5 +806,66 @@ export function assignRubricTemplate(
     method: "PUT",
     headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ rubric_template_id: rubricTemplateId }),
+  });
+}
+
+// REQ-F-004: 라이브 코딩 AI 분석. 복잡도는 정적 휴리스틱 근사치라 confidence 가 높지 않고,
+// disclaimer 는 항상 내려오므로 화면에서 생략하면 안 된다.
+export interface CodingProblemSampleTest {
+  input: string;
+  expected: string;
+}
+
+export interface CodingProblem {
+  id: string;
+  title: string;
+  statement: string;
+  difficulty: "easy" | "medium" | "hard";
+  sample_tests: CodingProblemSampleTest[];
+}
+
+export interface CodeCorrectnessFailure {
+  index: number;
+  input: string;
+  expected: string;
+  actual: string;
+  timed_out: boolean;
+}
+
+export interface CodeAnalysis {
+  // 문제를 고르지 않고 제출하면 null(정답 채점 없음).
+  correctness: {
+    total: number;
+    passed: number;
+    pass_rate: number;
+    failures: CodeCorrectnessFailure[];
+  } | null;
+  complexity: { estimate: string; basis: string[]; confidence: "low" | "medium" };
+  style: {
+    tool: string;
+    violations: number;
+    score: number;
+    items: { line: number; code: string; message: string }[];
+  };
+  comments: { comment_lines: number; code_lines: number; ratio: number; has_docstring: boolean; note: string };
+  disclaimer: string;
+}
+
+export function listCodingProblems(accessToken: string): Promise<CodingProblem[]> {
+  return request<CodingProblem[]>("/coding-problems", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function analyzeCodeSubmission(
+  accessToken: string,
+  interviewId: string,
+  submissionId: string,
+  problemId?: string | null,
+): Promise<CodeAnalysis> {
+  return request<CodeAnalysis>(`/interviews/${interviewId}/code-submissions/${submissionId}/analysis`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ problem_id: problemId ?? null }),
   });
 }

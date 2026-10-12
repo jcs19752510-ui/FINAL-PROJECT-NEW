@@ -22,14 +22,19 @@ from app.api.deps import get_current_user
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models.code_submission import CodeSubmission
+from app.models.coding_problem import CodingProblem
 from app.models.interview import Interview
 from app.models.user import User
 from app.schemas.code_submission import (
+    CodeAnalysisOut,
+    CodeAnalysisRequest,
+    CodingProblemOut,
     CodeExecutionCreate,
     CodeExecutionOut,
     CodeSubmissionCreate,
     CodeSubmissionOut,
 )
+from app.services import code_analysis
 from app.services.code_sandbox import UnsupportedSandboxLanguage, execute_code_sandboxed
 from app.services.prompt_safety import RateLimitExceeded, check_and_increment_sandbox_rate_limit
 
@@ -144,3 +149,73 @@ def execute_code_submission(
         exit_code=result.exit_code,
         timed_out=result.timed_out,
     )
+
+
+problems_router = APIRouter(prefix="/coding-problems", tags=["code-submissions"])
+
+
+@problems_router.get("", response_model=list[CodingProblemOut], status_code=status.HTTP_200_OK)
+def list_coding_problems(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[CodingProblemOut]:
+    """원본 REQ-F-004: 풀이할 코딩 문제 목록. 숨김 테스트(`hidden`)는 노출하지 않고 공개 예시만 최대 2개 준다."""
+    rows = db.scalars(select(CodingProblem).order_by(CodingProblem.created_at, CodingProblem.slug)).all()
+    return [
+        CodingProblemOut(
+            id=r.id,
+            title=r.title,
+            statement=r.statement,
+            difficulty=r.difficulty,
+            sample_tests=[
+                {"input": t["input"], "expected": t["expected"]} for t in r.tests_json if not t.get("hidden")
+            ][:2],
+        )
+        for r in rows
+    ]
+
+
+@router.post(
+    "/{interview_id}/code-submissions/{submission_id}/analysis",
+    response_model=CodeAnalysisOut,
+    status_code=status.HTTP_200_OK,
+)
+def analyze_code_submission(
+    interview_id: UUID,
+    submission_id: UUID,
+    payload: CodeAnalysisRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CodeAnalysisOut:
+    """원본 REQ-F-004 AI 분석(정답·시간복잡도·스타일·주석). 테스트케이스는 `code_sandbox.py` 격리 컨테이너에서만 실행하며,
+    실행을 동반하므로 샌드박스 실행과 같은 분당 5회 제한을 쓴다. 결과는 제출 행에 저장해 리포트 생성과 채용담당자 화면이 쓴다."""
+    _get_own_interview(interview_id, current_user, db)
+    submission = db.scalar(
+        select(CodeSubmission).where(CodeSubmission.id == submission_id, CodeSubmission.interview_id == interview_id)
+    )
+    if submission is None:
+        raise AppError(404, "NOT_FOUND", "Not Found", "코드 제출을 찾을 수 없습니다.")
+
+    problem = None
+    if payload.problem_id is not None:
+        problem = db.get(CodingProblem, payload.problem_id)
+        if problem is None:
+            raise AppError(404, "NOT_FOUND", "Not Found", "코딩 문제를 찾을 수 없습니다.")
+
+    try:
+        check_and_increment_sandbox_rate_limit(str(current_user.id))
+    except RateLimitExceeded as exc:
+        raise AppError(429, "RATE_LIMIT_EXCEEDED", "Too Many Requests", str(exc)) from exc
+
+    result = code_analysis.analyze_code(
+        submission.language,
+        submission.content,
+        tests=problem.tests_json if problem else None,
+        perf=problem.perf_json if problem else None,
+        runner=execute_code_sandboxed,
+    )
+    submission.problem_id = problem.id if problem else None
+    submission.analysis_json = result
+    db.commit()
+    return CodeAnalysisOut.model_validate(result)
+

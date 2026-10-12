@@ -27,6 +27,7 @@ from app.api.v1.interviews import _report_to_out
 from app.core.errors import AppError
 from app.core.security import hash_password
 from app.db.session import get_db
+from app.models.code_submission import CodeSubmission
 from app.models.evaluation_report import EvaluationReport
 from app.models.interview import Interview, ReportStatus
 from app.models.rubric_template import RubricTemplate
@@ -115,6 +116,12 @@ def get_report_detail(
     if report_available:
         report = db.scalar(select(EvaluationReport).where(EvaluationReport.interview_id == interview_id))
     canonical = _report_to_out(interview, report, db) if report_available else None
+    latest_code = db.scalar(
+        select(CodeSubmission)
+        .where(CodeSubmission.interview_id == interview_id, CodeSubmission.analysis_json.is_not(None))
+        .order_by(CodeSubmission.submitted_at.desc())
+        .limit(1)
+    )
 
     return RecruiterReportDetailOut(
         interview_id=interview.id,
@@ -127,6 +134,7 @@ def get_report_detail(
         overall_score=interview.overall_score,
         report_available=report_available,
         message=_report_state_message(interview.report_status),
+        code_analysis=latest_code.analysis_json if latest_code else None,
         technical_score=canonical.technical_score if canonical else None,
         communication_score=canonical.communication_score if canonical else None,
         cultural_fit_score=canonical.cultural_fit_score if canonical else None,

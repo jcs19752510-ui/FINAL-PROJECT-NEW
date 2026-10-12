@@ -29,6 +29,7 @@ import {
 } from "@/lib/api";
 import HomeLink from "@/components/HomeLink";
 import RubricEvidenceSection from "@/components/RubricEvidenceSection";
+import CodeAnalysisPanel from "@/components/CodeAnalysisPanel";
 import styles from "../recruiter.module.css";
 
 const STATUS_LABEL: Record<RecruiterReportDetailOut["status"], string> = {
@@ -270,6 +271,12 @@ export default function RecruiterReportDetailPage() {
                   detail.summary_text && <p style={{ whiteSpace: "pre-wrap" }}>{detail.summary_text}</p>
                 )}
               </>
+            )}
+            {/* REQ-F-004: 코드 분석이 있을 때만 표시(리포트 생성 여부와 무관) */}
+            {detail.code_analysis && (
+              <div style={{ marginTop: 20 }}>
+                <CodeAnalysisPanel analysis={detail.code_analysis} />
+              </div>
             )}
           </div>
         </div>

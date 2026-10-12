@@ -11,8 +11,9 @@
  * 언어는 여전히 저장만 가능하다(버튼 비활성 + 안내).
  *
  * **독립 컴포넌트 경계(오케스트레이터 지시)**: 이 파일은 unit-4가 소유한
- * `frontend/app/interviews/[id]/page.tsx`, `frontend/lib/api.ts`를 전혀 import하지
- *않는다 — API 호출(fetch)과 타입을 이 파일 안에 자체적으로 갖춰 독립적으로 완결시켰다.
+ * `frontend/app/interviews/[id]/page.tsx`를 import하지 않고, 제출·실행 API 호출(fetch)과
+ * 타입도 이 파일 안에 자체적으로 갖췄다. 예외로 REQ-F-004(라이브 코딩 AI 분석)의
+ * 문제 목록·분석 호출만 `frontend/lib/api.ts`의 공통 클라이언트를 쓴다(429 등 에러 규약 재사용).
  * 이 패널을 실제 면접장 화면에 삽입(탭 전환 등)하는 배선(wiring) 작업은 이번 유닛의
  * 책임이 아니며, 추후 통합 작업에서 `page.tsx`가 이 컴포넌트를 import해 사용하면 된다.
  * 스타일도 `globals.css`를 건드리지 않기 위해 이미 존재가 확인된 공통 클래스
@@ -21,6 +22,15 @@
 import { useEffect, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import "../../../../lib/monacoLocal"; // Monaco 를 CDN 대신 /monaco/vs 에서 로드(폐쇄망 대응)
+// REQ-F-004 라이브 코딩 AI 분석만 공통 api.ts 클라이언트를 쓴다(기존 제출·실행 fetch 는 그대로).
+import {
+  ApiError,
+  analyzeCodeSubmission,
+  listCodingProblems,
+  type CodeAnalysis,
+  type CodingProblem,
+} from "../../../../lib/api";
+import CodeAnalysisPanel from "../../../../components/CodeAnalysisPanel";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
@@ -76,6 +86,12 @@ interface CodeExecutionOut {
 // 반드시 동일하게 유지 — 나머지 9개 언어는 저장만 가능하고 실행 버튼은 비활성화된다.
 const EXECUTABLE_LANGUAGES: ReadonlySet<LanguageValue> = new Set(["python", "javascript"]);
 
+const DIFFICULTY_LABEL: Record<CodingProblem["difficulty"], string> = {
+  easy: "쉬움",
+  medium: "보통",
+  hard: "어려움",
+};
+
 type SaveStatus = "saved" | "saving" | "unsaved" | "error";
 
 const SAVE_STATUS_LABEL: Record<SaveStatus, string> = {
@@ -111,6 +127,13 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
   const [executionResult, setExecutionResult] = useState<CodeExecutionOut | null>(null);
   const [executionError, setExecutionError] = useState<string | null>(null);
   const lastSavedContentRef = useRef<string>("");
+  // REQ-F-004: 문제 목록·선택, 제출 후 분석 상태.
+  const [problems, setProblems] = useState<CodingProblem[]>([]);
+  const [problemsError, setProblemsError] = useState<string | null>(null);
+  const [problemId, setProblemId] = useState<string>("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysis, setAnalysis] = useState<CodeAnalysis | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // [C-07]: 언어를 바꿀 때마다 해당 언어의 최신 제출본을 불러와 에디터를 복원한다
   // (04-ux-design.md [C-07] GET 신규 용도). `cancelled` 플래그로 언어를 빠르게 여러 번
@@ -159,14 +182,31 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
     };
   }, [accessToken, interviewId, language]);
 
+  // 문제 목록은 한 번만 불러온다. 실패해도 에디터·제출·실행은 그대로 쓸 수 있다.
+  useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    listCodingProblems(accessToken)
+      .then((list) => {
+        if (!cancelled) setProblems(list);
+      })
+      .catch(() => {
+        if (!cancelled) setProblemsError("문제 목록을 불러오지 못했습니다.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
+
   function handleEditorChange(value: string | undefined) {
     const next = value ?? "";
     setContent(next);
     setSaveStatus(next === lastSavedContentRef.current ? "saved" : "unsaved");
   }
 
-  async function handleSubmit() {
-    if (!accessToken) return;
+  // 성공 시 저장된 제출 id 를 돌려준다(제출 후 분석에서 사용). 실패하면 null.
+  async function handleSubmit(): Promise<string | null> {
+    if (!accessToken) return null;
     setSaveStatus("saving");
     setSubmitError(null);
     try {
@@ -186,9 +226,37 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
       // 않는다([C-07] 에러 상태 명세) — 재시도는 이 버튼을 다시 누르는 것으로 충분하다.
       lastSavedContentRef.current = content;
       setSaveStatus("saved");
+      const saved = (await res.json().catch(() => null)) as CodeSubmissionOut | null;
+      return saved?.id ?? null;
     } catch (err) {
       setSaveStatus("error");
       setSubmitError(err instanceof Error ? err.message : "코드 제출 중 오류가 발생했습니다.");
+      return null;
+    }
+  }
+
+  async function handleSubmitAndAnalyze() {
+    if (!accessToken || analyzing) return;
+    setAnalyzing(true);
+    setAnalysis(null);
+    setAnalysisError(null);
+    try {
+      const submissionId = await handleSubmit();
+      if (!submissionId) {
+        setAnalysisError("제출에 실패해 분석을 진행하지 못했습니다.");
+        return;
+      }
+      setAnalysis(await analyzeCodeSubmission(accessToken, interviewId, submissionId, problemId || null));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        setAnalysisError("현재 분석 요청이 많습니다. 잠시 후 다시 시도해주세요.");
+      } else if (err instanceof ApiError) {
+        setAnalysisError(err.message);
+      } else {
+        setAnalysisError("네트워크 오류가 발생했습니다. 다시 시도해주세요.");
+      }
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -220,6 +288,7 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
 
   const showSkeleton = editorMounting || restoreLoading;
   const canExecute = EXECUTABLE_LANGUAGES.has(language);
+  const selectedProblem = problems.find((p) => p.id === problemId) ?? null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -246,6 +315,34 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
         )}
       </header>
 
+      {problems.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          <select
+            value={problemId}
+            onChange={(e) => setProblemId(e.target.value)}
+            aria-label="코딩 문제 선택"
+            disabled={analyzing}
+          >
+            <option value="">문제 선택 안 함</option>
+            {problems.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title} ({DIFFICULTY_LABEL[p.difficulty]})
+              </option>
+            ))}
+          </select>
+          {selectedProblem && (
+            <div style={{ fontSize: "0.875rem" }} data-testid="problem-statement">
+              <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{selectedProblem.statement}</p>
+              {selectedProblem.sample_tests.map((t, i) => (
+                <pre key={i} style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", whiteSpace: "pre-wrap" }}>
+                  {`예시 ${i + 1}\n입력: ${t.input}\n출력: ${t.expected}`}
+                </pre>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {problemsError && <div className="banner-error">{problemsError}</div>}
       {restoreError && <div className="banner-error">{restoreError}</div>}
       {submitError && <div className="banner-error">{submitError}</div>}
 
@@ -289,6 +386,13 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
           <button type="button" onClick={handleExecute} disabled={!canExecute || executing || restoreLoading}>
             {executing ? "실행 중..." : "실행"}
           </button>
+          <button
+            type="button"
+            onClick={handleSubmitAndAnalyze}
+            disabled={analyzing || saveStatus === "saving" || restoreLoading}
+          >
+            {analyzing ? "분석 중..." : "제출 후 분석"}
+          </button>
           {!canExecute && (
             <span style={{ fontSize: "0.8rem", color: "#868e96" }}>
               Python·JavaScript만 실행할 수 있습니다(나머지 언어는 저장만 가능).
@@ -297,6 +401,9 @@ export default function CodeEditorPanel({ interviewId, accessToken, onBackToChat
         </div>
 
         {executionError && <div className="banner-error">{executionError}</div>}
+        {analysisError && <div className="banner-error" role="alert">{analysisError}</div>}
+        {analyzing && <div role="status" style={{ fontSize: "0.875rem" }}>코드를 분석하는 중입니다...</div>}
+        {analysis && <CodeAnalysisPanel analysis={analysis} />}
 
         {executionResult && (
           <div

@@ -46,6 +46,7 @@ _TIMEOUT_SECONDS = 8
 _MEMORY_LIMIT = "128m"
 _CPU_LIMIT = "0.5"
 _PIDS_LIMIT = "32"
+_MAX_STDIN_CHARS = 200000  # 성능 측정용 큰 입력도 허용하되 무한 크기는 막는다
 _MAX_OUTPUT_CHARS = 4000  # 무한 출력(예: `while True: print(...)`)으로 응답이 비대해지는 것 방지
 
 _LANGUAGE_RUNTIMES = {
@@ -74,7 +75,7 @@ class SandboxResult:
     timed_out: bool
 
 
-def execute_code_sandboxed(language: str, code: str) -> SandboxResult:
+def execute_code_sandboxed(language: str, code: str, stdin_text: str | None = None) -> SandboxResult:
     """`docker run`을 서브프로세스로 실행해 격리된 컨테이너 안에서만 코드를
     돌린다. 모듈 docstring의 9가지 원칙을 전부 적용한다 — 이 함수를 수정할
     때 그중 하나라도 빠뜨리면 안 된다.
@@ -103,6 +104,7 @@ def execute_code_sandboxed(language: str, code: str) -> SandboxResult:
             "--memory", _MEMORY_LIMIT,
             "--cpus", _CPU_LIMIT,
             "--pids-limit", _PIDS_LIMIT,
+            *(["-i"] if stdin_text is not None else []),  # 테스트케이스 입력(표준입력) 전달 시에만 stdin 연결
             "-v", f"{code_path}:/sandbox/{runtime['filename']}:ro",
             runtime["image"],
             *runtime["command"],
@@ -113,6 +115,7 @@ def execute_code_sandboxed(language: str, code: str) -> SandboxResult:
             proc = subprocess.run(
                 docker_cmd,
                 capture_output=True,
+                input=stdin_text[:_MAX_STDIN_CHARS] if stdin_text is not None else None,
                 timeout=_TIMEOUT_SECONDS,
                 text=True,
                 encoding="utf-8",

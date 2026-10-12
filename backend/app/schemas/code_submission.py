@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -75,3 +76,70 @@ class CodeExecutionOut(BaseModel):
     stderr: str
     exit_code: int | None
     timed_out: bool
+
+
+class CodingProblemOut(BaseModel):
+    """채점용 숨김 테스트는 포함하지 않는다(공개 예시만)."""
+
+    id: UUID
+    title: str
+    statement: str
+    difficulty: str
+    sample_tests: list[dict]
+
+
+class CodeAnalysisRequest(BaseModel):
+    problem_id: UUID | None = None
+
+
+class FailureOut(BaseModel):
+    index: int
+    input: str
+    expected: str
+    actual: str
+    timed_out: bool
+
+
+class CorrectnessOut(BaseModel):
+    total: int
+    passed: int
+    pass_rate: float
+    failures: list[FailureOut]
+
+
+class ComplexityOut(BaseModel):
+    estimate: str
+    basis: list[str]
+    confidence: Literal["low", "medium"]
+
+
+class StyleItemOut(BaseModel):
+    line: int
+    code: str
+    message: str
+
+
+class StyleOut(BaseModel):
+    tool: str
+    violations: int
+    score: int
+    items: list[StyleItemOut]
+
+
+class CommentsOut(BaseModel):
+    comment_lines: int
+    code_lines: int
+    ratio: float
+    has_docstring: bool
+    note: str
+
+
+class CodeAnalysisOut(BaseModel):
+    """원본 REQ-F-004 AI 분석 4종. 수치는 도구 계산값이며 시간복잡도는 근사치다."""
+
+    correctness: CorrectnessOut | None
+    complexity: ComplexityOut
+    style: StyleOut
+    comments: CommentsOut
+    disclaimer: str
+

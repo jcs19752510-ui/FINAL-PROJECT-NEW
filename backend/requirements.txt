@@ -28,6 +28,7 @@ langchain-openai>=0.2,<0.3
 langgraph>=1.0,<2.0
 # 2026-10-12: Prometheus 지표 노출(app/core/metrics.py, 기본 꺼짐)
 prometheus-client>=0.20,<1.0
+ruff>=0.16,<0.17  # 코드 분석(REQ-F-004) 스타일 검사: 제출 코드를 실행하지 않고 파싱만 한다
 # unit-35(원안 REQ-021, 화이트보드 AI 비전 분석): 스트로크 좌표를 PNG로 래스터라이즈하는 데
 # 사용(app/services/whiteboard_vision.py). unit-35 착수 시점에 backend/.venv에는 이미 설치돼
 # 있었으나 이 파일에 선언이 누락돼 있던 결함을 함께 수정(신규 환경에서 재현 불가했을 것).

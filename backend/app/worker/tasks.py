@@ -35,11 +35,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.evaluation_report import EvaluationReport, OverallRecommendation, PassFailRecommendation
+from app.models.code_submission import CodeSubmission
 from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
 from app.models.rubric_template import RubricTemplate
 from app.models.transcript import InputMode, Speaker, Transcript
-from app.services import conversation_memory, interruption_policy, interview_prompts, rag_engine, turn_graph
+from app.services import code_analysis, conversation_memory, interruption_policy, interview_prompts, rag_engine, turn_graph
 from app.services.celery_app import celery_app
 from app.services.llm_engine import (
     LlmGenerationError,
@@ -577,6 +578,15 @@ def process_report_generation_job(self, interview_id: str) -> None:
         max_tokens = report_max_tokens(len(criteria))
         budgeted_lines = _budget_transcript_lines(lines, system_prompt, criteria_block, max_tokens)
         user_message = interview_prompts.format_transcript_for_report(budgeted_lines, criteria_block)
+        # 원본 REQ-F-004: 분석된 코드 제출물이 있으면 도구 계산 요약을 입력에 덧붙인다(LLM 은 서술만, 수치는 도구 값).
+        analyzed = db.scalar(
+            select(CodeSubmission)
+            .where(CodeSubmission.interview_id == interview_uuid, CodeSubmission.analysis_json.is_not(None))
+            .order_by(CodeSubmission.submitted_at.desc())
+            .limit(1)
+        )
+        if analyzed is not None:
+            user_message += "\n\n" + code_analysis.summarize_for_report(analyzed.analysis_json)
 
         rubric_snapshot = (
             {

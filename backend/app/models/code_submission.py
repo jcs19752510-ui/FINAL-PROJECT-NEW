@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -41,3 +41,9 @@ class CodeSubmission(Base):
     language: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str] = mapped_column(EncryptedText, nullable=False)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # 2026-10-12(원본 REQ-F-004): 풀이한 문제와 AI 분석 결과. 분석 결과는 도구 계산값(테스트 통과율·복잡도 근사·
+    # 스타일·주석)이며 코드 원문은 포함하지 않는다. 이 컬럼들이 생기면서 위 docstring 의 "실행 관련 필드 없음" 원칙은 분석 결과에 한해 완화됐다.
+    problem_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("coding_problems.id"), nullable=True
+    )
+    analysis_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
