@@ -39,7 +39,7 @@ from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
 from app.models.rubric_template import RubricTemplate
 from app.models.transcript import InputMode, Speaker, Transcript
-from app.services import conversation_memory, interview_prompts, rag_engine, turn_graph
+from app.services import conversation_memory, interruption_policy, interview_prompts, rag_engine, turn_graph
 from app.services.celery_app import celery_app
 from app.services.llm_engine import (
     LlmGenerationError,
@@ -239,7 +239,7 @@ def process_opening_question_job(self, interview_id: str) -> None:
 
 
 @celery_app.task(name="app.worker.tasks.process_turn_job", bind=True)
-def process_turn_job(self, interview_id: str, transcript_id: str) -> None:
+def process_turn_job(self, interview_id: str, transcript_id: str, interrupt_reason: str | None = None) -> None:
     """`POST /interviews/{id}/turns` 성공(사용자 턴 커밋 완료) 직후 enqueue되는 job.
 
     사용자 턴은 이미 `TRANSCRIPTS`에 저장되어 있다(§4.2, unit-4/5). 이 태스크는
@@ -279,6 +279,9 @@ def process_turn_job(self, interview_id: str, transcript_id: str) -> None:
             "[대화 이력]\n" + "\n".join(history_lines) +
             f"\n\n[지원자의 최신 답변]\n{latest_answer}"
         )
+        if interrupt_reason in interruption_policy.POLITE_INTERRUPTION:
+            # 원본 REQ-F-003: 서버가 재검증을 통과시킨 개입 턴만 고정 진행 지시를 덧붙인다.
+            user_message += "\n\n" + interruption_policy.INTERRUPT_INSTRUCTION
 
         if settings.llm_orchestration == "graph":
             # RAG + LangChain + LangGraph 경로(app/services/turn_graph.py) — 기존 분기
@@ -313,6 +316,18 @@ def process_turn_job(self, interview_id: str, transcript_id: str) -> None:
             except LlmGenerationError:
                 logger.warning("turn LLM 생성 실패 — 안전 기본값 폴백", exc_info=True)
                 output = TurnLLMOutput(speak_text=_TURN_FALLBACK_TEXT, control="next_question")
+
+        if interrupt_reason in interruption_policy.POLITE_INTERRUPTION:
+            # 모델 문구 품질에 의존하지 않고 서버가 고정 정중 문구를 앞에 붙인다. 개입 뒤에는 항상 다음 질문으로 진행.
+            output = output.model_copy(
+                update={
+                    "speak_text": interruption_policy.apply_polite_interruption(
+                        output.speak_text, interrupt_reason, _TURN_FALLBACK_TEXT
+                    ),
+                    "control": "next_question",
+                }
+            )
+            logger.info("정중한 개입 적용 interview=%s reason=%s", interview_id, interrupt_reason)
 
         _publish_stage(interview_uuid, job_id, "tts")
         audio_url = _synthesize_or_none(output.speak_text)

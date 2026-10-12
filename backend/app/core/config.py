@@ -1,6 +1,7 @@
 """환경변수 기반 설정. 시크릿을 코드에 하드코딩하지 않는다 (게이트2 체크리스트)."""
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +48,14 @@ class Settings(BaseSettings):
     onprem_mode: bool = True
     # 2026-10-12: Prometheus 지표 노출(GET /metrics). 인증이 없으므로 기본 꺼짐 — 내부망에서만 접근시킬 때 true로.
     metrics_enabled: bool = False
+    # 2026-10-12(원본 REQ-F-003): AI 면접관의 정중한 개입(답변이 너무 길거나 주제를 벗어날 때). 기본 켜짐, 끄려면 false.
+    # 임계치는 보수적인 기본값이며 실제 면접 데이터로 보정해야 한다(app/services/interruption_policy.py).
+    interruption_enabled: bool = True
+    interrupt_max_answer_seconds: float = Field(default=120.0, gt=0)
+    interrupt_off_topic_min_seconds: float = Field(default=30.0, ge=0)
+    interrupt_off_topic_min_words: int = Field(default=25, ge=1)
+    interrupt_off_topic_similarity: float = Field(default=0.15, ge=-1.0, le=1.0)
+    interrupt_off_topic_consecutive: int = Field(default=2, ge=1)
     # unit-32/DEC-057(2026-09-23, 사용자 제공 키로 실측 검증): 벤더 어댑터는
     # `app/services/stt_adapter_deepgram.py`/`tts_adapter_elevenlabs.py`/
     # `whiteboard_vision.py`에 함수로만 존재하고 아직 어떤 API 엔드포인트에도

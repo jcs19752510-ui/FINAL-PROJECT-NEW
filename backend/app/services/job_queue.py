@@ -100,7 +100,9 @@ def enqueue_report_generation_job(interview_id: uuid.UUID) -> str:
     return result.id
 
 
-def enqueue_turn_job(interview_id: uuid.UUID, transcript_id: uuid.UUID) -> str:
+def enqueue_turn_job(
+    interview_id: uuid.UUID, transcript_id: uuid.UUID, interrupt_reason: str | None = None
+) -> str:
     """`POST /interviews/{id}/turns` 제출(텍스트/음성 공통) 성공 직후 호출
     (unit-4/5, REQ-003/004/005, §4.2/§4.3).
 
@@ -109,9 +111,9 @@ def enqueue_turn_job(interview_id: uuid.UUID, transcript_id: uuid.UUID) -> str:
     태스크가 RAG 검색 → LLM 꼬리질문 생성 → TTS 합성 → `TRANSCRIPTS`(speaker=ai)
     저장 → WS `stage_update`/`turn_result` push를 전부 실제로 수행한다(unit-7).
     """
-    result = celery_app.send_task(
-        "app.worker.tasks.process_turn_job",
-        args=[str(interview_id), str(transcript_id)],
-    )
+    args = [str(interview_id), str(transcript_id)]
+    if interrupt_reason:  # 개입이 확정된 턴만 세 번째 인자를 보낸다(기존 형태 그대로 유지)
+        args.append(interrupt_reason)
+    result = celery_app.send_task("app.worker.tasks.process_turn_job", args=args)
     register_job(interview_id, result.id)
     return result.id

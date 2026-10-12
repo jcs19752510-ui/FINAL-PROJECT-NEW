@@ -77,7 +77,8 @@ from app.schemas.interview import (
     RubricOut,
     StarOut,
 )
-from app.schemas.transcript import TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
+from app.schemas.transcript import InterruptHint, TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
+from app.services import interruption_policy
 from app.services.interview_prompts import contains_persona_leak_marker
 from app.services.job_queue import (
     MAX_QUEUE_LENGTH,
@@ -125,6 +126,17 @@ router = APIRouter(prefix="/interviews", tags=["interviews"])
 # 세션으로 보는 것이 합리적 기본값이다. 상수 하나로 격리되어 있어 되돌리기 쉬우며
 # (Low 비가역성), unit-4 이후 실제 마지막 turn 시각 기준으로 바꿀 수 있다.
 SESSION_EXPIRY = timedelta(hours=24)
+
+
+def _latest_ai_question(db: Session, interview_id: UUID) -> str | None:
+    """가장 최근 AI 발화(면접관 질문) 텍스트. 개입 판정에서 답변과의 관련도를 비교하는 기준."""
+    row = (
+        db.query(Transcript)
+        .filter(Transcript.interview_id == interview_id, Transcript.speaker == Speaker.ai)
+        .order_by(Transcript.turn_index.desc())
+        .first()
+    )
+    return row.content_text if row else None
 
 
 def _get_own_interview(interview_id: UUID, current_user: User, db: Session) -> Interview:
@@ -665,6 +677,14 @@ async def _submit_voice_turn(
     if audio is None or not hasattr(audio, "read"):
         raise AppError(422, "VALIDATION_ERROR", "Validation Error", "음성 파일(`audio` 필드)이 필요합니다.")
 
+    # 원본 REQ-F-003: 클라이언트가 "개입했다"고 주장하는 사유. 열거형이 아니면 거부하고,
+    # 맞는 주장인지는 아래에서 서버가 길이·텍스트로 다시 검증한다.
+    interrupt_reason = form.get("interrupt_reason")
+    if interrupt_reason is not None:
+        interrupt_reason = str(interrupt_reason).strip() or None
+    if interrupt_reason is not None and interrupt_reason not in interruption_policy.VALID_REASONS:
+        raise AppError(422, "VALIDATION_ERROR", "Validation Error", "interrupt_reason 값이 올바르지 않습니다.")
+
     audio_bytes = await audio.read()
     if not audio_bytes:
         raise AppError(422, "VALIDATION_ERROR", "Validation Error", "빈 음성 파일입니다.")
@@ -732,7 +752,28 @@ async def _submit_voice_turn(
         ),
     )
 
-    job_id = await run_in_threadpool(enqueue_turn_job, interview.id, transcript.id)
+    verified_reason: str | None = None
+    if interrupt_reason:
+        duration = (prosody_json or {}).get("duration_sec")
+        question_text = await run_in_threadpool(_latest_ai_question, db, interview.id)
+        ok = await run_in_threadpool(
+            lambda: interruption_policy.verify_claim(
+                interrupt_reason,
+                duration_sec=duration,
+                answer_text=text,
+                question_text=question_text,
+                cfg=interruption_policy.config_from_settings(),
+            )
+        )
+        if ok:
+            verified_reason = interrupt_reason
+        else:
+            logger.info("개입 주장 무시(서버 재검증 실패): reason=%s interview=%s", interrupt_reason, interview.id)
+
+    if verified_reason:
+        job_id = await run_in_threadpool(enqueue_turn_job, interview.id, transcript.id, verified_reason)
+    else:
+        job_id = await run_in_threadpool(enqueue_turn_job, interview.id, transcript.id)
     return TurnAcceptedResponse(job_id=job_id)
 
 
@@ -833,6 +874,10 @@ async def submit_voice_preview(
     if audio is None or not hasattr(audio, "read"):
         raise AppError(422, "VALIDATION_ERROR", "Validation Error", "음성 파일(`audio` 필드)이 필요합니다.")
 
+    elapsed_seconds = interruption_policy.sanitize_elapsed(form.get("elapsed_seconds"))
+    low_streak_in = interruption_policy.sanitize_streak(form.get("low_streak"))
+    answer_so_far = str(form.get("answer_so_far") or "")[: interruption_policy.MAX_ANSWER_CHARS]
+
     audio_bytes = await audio.read()
     if not audio_bytes:
         # 최종 제출과 달리 조용히 빈 텍스트를 돌려준다 — 미리보기 조각 하나가
@@ -856,7 +901,23 @@ async def submit_voice_preview(
     finally:
         del audio_bytes
 
-    return VoicePreviewResponse(text=text)
+    # 원본 REQ-F-003: 개입 판정(서버가 판정, 상태는 저장하지 않고 연속 횟수는 클라이언트가 되돌려 보낸다).
+    full_answer = f"{answer_so_far} {text}".strip()[-interruption_policy.MAX_ANSWER_CHARS :]
+    question_text = await run_in_threadpool(_latest_ai_question, db, interview.id)
+    decision, streak = await run_in_threadpool(
+        lambda: interruption_policy.evaluate_preview(
+            elapsed_seconds=elapsed_seconds,
+            answer_text=full_answer,
+            question_text=question_text,
+            low_streak=low_streak_in,
+            cfg=interruption_policy.config_from_settings(),
+        )
+    )
+    return VoicePreviewResponse(
+        text=text,
+        interrupt=InterruptHint(should_interrupt=decision.should_interrupt, reason=decision.reason),
+        low_streak=streak,
+    )
 
 
 @router.get("/{interview_id}/transcripts", response_model=list[TranscriptOut], status_code=status.HTTP_200_OK)

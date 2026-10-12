@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -15,6 +16,13 @@ class TurnCreate(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class InterruptHint(BaseModel):
+    """AI 개입 판정(원본 REQ-F-003). `reason`은 should_interrupt가 True일 때만 값이 있다."""
+
+    should_interrupt: bool
+    reason: Literal["too_long", "off_topic"] | None = None
+
+
 class VoicePreviewResponse(BaseModel):
     """POST /interviews/{id}/turns/preview 응답 (unit-36, STT 실시간 스트리밍 미리보기).
 
@@ -24,6 +32,9 @@ class VoicePreviewResponse(BaseModel):
     """
 
     text: str
+    # 원본 REQ-F-003: 개입 판정과, 클라이언트가 다음 요청에 되돌려 보낼 연속 하락 횟수(서버는 상태를 저장하지 않는다).
+    interrupt: InterruptHint | None = None
+    low_streak: int = 0
 
 
 class TranscriptOut(BaseModel):
