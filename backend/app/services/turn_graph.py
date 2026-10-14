@@ -116,13 +116,14 @@ def build_followup_graph(
     generate: Callable[[str, str], TurnLLMOutput],
     on_persona_leak: Callable[[str], None],
     turn_fallback_text: str,
+    resume_section: str = "",
 ):
     """그래프를 구성해 컴파일한다. 외부 의존(검색/LLM/감사로그)은 전부 주입받아 테스트 가능하다."""
 
     def retrieve(state: FollowupState) -> dict:
         retriever.invoke(state["query_text"])
         candidates = list(retriever.last_questions)
-        system_prompt = interview_prompts.build_followup_system_prompt(candidates)
+        system_prompt = interview_prompts.build_followup_system_prompt(candidates) + resume_section
         return {"candidates": candidates, "system_prompt": system_prompt, "generations": 0}
 
     def generate_node(state: FollowupState) -> dict:
@@ -191,6 +192,7 @@ def run_followup_graph(
     on_persona_leak: Callable[[str], None],
     turn_fallback_text: str,
     generate: Callable[[str, str], TurnLLMOutput] | None = None,
+    resume_section: str = "",
 ) -> FollowupResult:
     """운영 진입점. `generate`를 생략하면 LangChain 경로(`generate_turn_via_langchain`)를 쓴다."""
     if generate is None:
@@ -209,6 +211,7 @@ def run_followup_graph(
         generate=generate,
         on_persona_leak=on_persona_leak,
         turn_fallback_text=turn_fallback_text,
+        resume_section=resume_section,
     )
     final = compiled.invoke({"query_text": query_text, "user_message": user_message, "trace": []})
     return FollowupResult(

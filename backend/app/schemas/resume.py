@@ -19,6 +19,7 @@ class MyResumeStatusOut(BaseModel):
     interview_schedule_note: str | None
     submitted_at: datetime
     reviewed_at: datetime | None
+    profile_status: str = "pending"
 
     model_config = {"from_attributes": True}
 

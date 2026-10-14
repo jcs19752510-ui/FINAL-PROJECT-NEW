@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # 2026-10-12(원본 REQ-F-003): AI 면접관의 정중한 개입(답변이 너무 길거나 주제를 벗어날 때). 기본 켜짐, 끄려면 false.
     # 임계치는 보수적인 기본값이며 실제 면접 데이터로 보정해야 한다(app/services/interruption_policy.py).
     interruption_enabled: bool = True
+    # 2026-10-14: 이력서 기반 맞춤 면접(첫 질문·후속 질문). 켜져 있으면 이력서 없음/판독 불가 시 면접 시작을 막는다.
+    resume_personalization_enabled: bool = True
     interrupt_max_answer_seconds: float = Field(default=120.0, gt=0)
     interrupt_off_topic_min_seconds: float = Field(default=30.0, ge=0)
     interrupt_off_topic_min_words: int = Field(default=25, ge=1)

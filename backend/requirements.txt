@@ -42,3 +42,4 @@ deepface==0.0.101
 tensorflow==2.21.0
 tf-keras==2.21.0
 opencv-python==5.0.0.93
+pypdf>=4.0,<7

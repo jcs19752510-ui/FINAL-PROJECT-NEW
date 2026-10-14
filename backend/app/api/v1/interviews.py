@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models.consent import Consent, ConsentType
@@ -79,6 +80,7 @@ from app.schemas.interview import (
 )
 from app.schemas.transcript import InterruptHint, TranscriptOut, TurnAcceptedResponse, TurnCreate, VoicePreviewResponse
 from app.services import interruption_policy
+from app.services.resume_context import ensure_profile
 from app.services.interview_prompts import contains_persona_leak_marker
 from app.services.job_queue import (
     MAX_QUEUE_LENGTH,
@@ -270,6 +272,18 @@ def start_interview(
             "Forbidden",
             "AI 면접 진행/평가 사실에 대한 사전고지 동의가 필요합니다.",
         )
+
+    # 2026-10-14 이력서 기반 맞춤 면접: 이력서가 없거나 글자를 읽지 못하면 시작을 막는다(사용자 결정).
+    if settings.resume_personalization_enabled:
+        profile_status, _profile = ensure_profile(db, current_user.id)
+        if profile_status != "ready":
+            raise AppError(
+                409,
+                "RESUME_REQUIRED",
+                "Conflict",
+                "맞춤 면접을 시작하려면 글자를 읽을 수 있는 이력서(PDF)가 필요합니다. "
+                "스캔본이 아닌 PDF로 이력서를 제출해 주세요.",
+            )
 
     interview.status = InterviewStatus.live
     interview.started_at = datetime.now(UTC)

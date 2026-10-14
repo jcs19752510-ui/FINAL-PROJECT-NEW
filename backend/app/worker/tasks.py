@@ -40,7 +40,16 @@ from app.models.interview import Interview, InterviewStatus, ReportStatus
 from app.models.question import Question, QuestionCategory
 from app.models.rubric_template import RubricTemplate
 from app.models.transcript import InputMode, Speaker, Transcript
-from app.services import code_analysis, conversation_memory, interruption_policy, interview_prompts, rag_engine, turn_graph
+from app.services import (  # noqa: E501
+    code_analysis,
+    conversation_memory,
+    interruption_policy,
+    interview_prompts,
+    rag_engine,
+    resume_context,
+    resume_profile,
+    turn_graph,
+)
 from app.services.celery_app import celery_app
 from app.services.llm_engine import (
     LlmGenerationError,
@@ -203,12 +212,22 @@ def process_opening_question_job(self, interview_id: str) -> None:
 
         _publish_stage(interview_uuid, job_id, "llm")
 
+        # 이력서 기반 맞춤 면접: 이력서 요약이 있으면 규칙 기반 템플릿으로 첫 질문을 만든다(LLM 미사용 → 환각 없음).
+        profile = resume_context.load_profile_for_interview(db, interview.candidate_id)
+        personalized_text = resume_profile.build_opening_question(profile)
+
         opening_candidates = rag_engine.search_similar_questions(
-            db, query_text="면접 시작 오프닝 자기소개", category=QuestionCategory.opening, top_k=1
+            db,
+            query_text=resume_profile.opening_search_query(profile),
+            category=QuestionCategory.opening,
+            top_k=1,
         )
         opening_question = opening_candidates[0] if opening_candidates else None
 
-        if opening_question is not None:
+        if personalized_text is not None:
+            output = TurnLLMOutput(speak_text=personalized_text, control="none")
+            logger.info("opening_question 이력서 맞춤 질문 사용: %s", interview_id)
+        elif opening_question is not None:
             output = TurnLLMOutput(speak_text=opening_question.content, control="none")
         else:
             logger.warning("질문은행에 opening 카테고리 항목이 없어 고정 폴백 사용: %s", interview_id)
@@ -222,7 +241,7 @@ def process_opening_question_job(self, interview_id: str) -> None:
             interview_uuid,
             lambda turn_index: Transcript(
                 interview_id=interview_uuid,
-                question_id=opening_question.id if opening_question else None,
+                question_id=opening_question.id if (opening_question and personalized_text is None) else None,
                 turn_index=turn_index,
                 speaker=Speaker.ai,
                 input_mode=InputMode.text,
@@ -284,13 +303,19 @@ def process_turn_job(self, interview_id: str, transcript_id: str, interrupt_reas
             # 원본 REQ-F-003: 서버가 재검증을 통과시킨 개입 턴만 고정 진행 지시를 덧붙인다.
             user_message += "\n\n" + interruption_policy.INTERRUPT_INSTRUCTION
 
+        # 이력서 기반 맞춤 면접: 요약 섹션(정화·길이 제한됨)을 시스템 프롬프트에, 기술 키워드를 RAG 검색어에 보강한다.
+        resume_prof = resume_context.load_profile_for_interview(db, interview.candidate_id)
+        resume_section = resume_profile.prompt_section(resume_prof)
+        search_query = resume_profile.followup_query(user_transcript.content_text, resume_prof)
+
         if settings.llm_orchestration == "graph":
             # RAG + LangChain + LangGraph 경로(app/services/turn_graph.py) — 기존 분기
             # (검색 → 생성 → 검증 → 재시도 1회 → 질문은행 폴백 / LLM 실패 시 안전 기본값)와 동일 정책.
             graph_result = turn_graph.run_followup_graph(
                 db,
-                query_text=user_transcript.content_text,
+                query_text=search_query,
                 user_message=user_message,
+                resume_section=resume_section,
                 min_similarity=_FOLLOWUP_RAG_MIN_SIMILARITY,
                 on_persona_leak=lambda text: log_persona_leak_detected(str(interview_uuid), text),
                 turn_fallback_text=_TURN_FALLBACK_TEXT,
@@ -305,14 +330,14 @@ def process_turn_job(self, interview_id: str, transcript_id: str, interrupt_reas
         else:
             rag_candidates = rag_engine.search_similar_questions(
                 db,
-                query_text=user_transcript.content_text,
+                query_text=search_query,
                 exclude_categories={QuestionCategory.opening},
                 top_k=3,
                 min_similarity=_FOLLOWUP_RAG_MIN_SIMILARITY,
             )
 
             try:
-                system_prompt = interview_prompts.build_followup_system_prompt(rag_candidates)
+                system_prompt = interview_prompts.build_followup_system_prompt(rag_candidates) + resume_section
                 output = _generate_validated_followup(interview_uuid, system_prompt, user_message, rag_candidates)
             except LlmGenerationError:
                 logger.warning("turn LLM 생성 실패 — 안전 기본값 폴백", exc_info=True)

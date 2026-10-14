@@ -31,6 +31,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.services.field_encryption import EncryptedText
 
 
 class ResumeApplicationStatus(StrEnum):
@@ -68,3 +69,7 @@ class ResumeApplication(Base):
     # 백엔드는 이메일을 자동 발송하지 않는다, 감사 추적용 타임스탬프만 남긴다).
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # 2026-10-14 이력서 기반 맞춤 면접: pending(미분석·레거시) / ready / unreadable(스캔·빈 PDF).
+    profile_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    # 핵심 요약(JSON)만 암호화 저장. 원문 전체는 저장하지 않는다.
+    profile_json: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)

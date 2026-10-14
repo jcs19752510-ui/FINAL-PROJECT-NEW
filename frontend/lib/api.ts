@@ -470,6 +470,8 @@ export interface InterviewStartResponse {
   interview: InterviewOut;
 }
 
+// 이력서가 없거나 글자 추출에 실패하면 HTTP 409 + `ApiError.code === "RESUME_REQUIRED"`
+// (구분은 lib/resumeGate.mjs의 isResumeRequiredError 사용).
 export function startInterview(accessToken: string, interviewId: string): Promise<InterviewStartResponse> {
   return request<InterviewStartResponse>(`/interviews/${interviewId}/start`, {
     method: "POST",
@@ -675,6 +677,8 @@ export interface MyResumeStatusOut {
   interview_schedule_note: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  // 이력서 글자 추출 상태. 구버전 백엔드 응답에는 없을 수 있다.
+  profile_status?: "ready" | "unreadable" | "pending";
 }
 
 // 응답이 없으면(지원서 기록 자체가 없음) `null` — 하위호환 게이트 정책

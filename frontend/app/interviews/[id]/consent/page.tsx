@@ -28,6 +28,7 @@ import {
   readAccessToken,
   startInterview,
 } from "@/lib/api";
+import { resumeRequiredNotice } from "@/lib/resumeGate.mjs";
 import { PRE_NOTICE_TEXT } from "@/lib/complianceContent";
 import HomeLink from "@/components/HomeLink";
 import styles from "./consent.module.css";
@@ -42,6 +43,7 @@ export default function ConsentNoticePage() {
   const [accessToken] = useState<string | null>(() => readAccessToken());
   const [interview, setInterview] = useState<InterviewDetailOut | null>(null);
   const [loading, setLoading] = useState(true);
+  const [resumeNotice, setResumeNotice] = useState<ReturnType<typeof resumeRequiredNotice>>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [scrolledToEnd, setScrolledToEnd] = useState(false);
@@ -114,6 +116,7 @@ export default function ConsentNoticePage() {
     if (!accessToken || !interview || !noticeChecked || submitting) return;
     setSubmitting(true);
     setSubmitError(null);
+    setResumeNotice(null);
 
     try {
       await createConsent(accessToken, "ai_interview_notice");
@@ -134,7 +137,10 @@ export default function ConsentNoticePage() {
       await startInterview(accessToken, interview.id);
       router.push(`/interviews/${interview.id}`);
     } catch (err) {
-      if (err instanceof ApiError) {
+      const notice = resumeRequiredNotice(err);
+      if (notice) {
+        setResumeNotice(notice);
+      } else if (err instanceof ApiError) {
         if (err.status === 403 && err.code === "CONSENT_REQUIRED_NOTICE") {
           setNoticeChecked(false);
           setSubmitError("동의 처리가 반영되지 않았습니다. 필수 항목에 다시 동의한 뒤 시도해주세요.");
@@ -222,6 +228,15 @@ export default function ConsentNoticePage() {
           </span>
         </label>
       </div>
+
+      {resumeNotice && (
+        <div className="banner-error" role="alert">
+          <p>{resumeNotice.message}</p>
+          <Link href={resumeNotice.href} className="submit-button">
+            {resumeNotice.linkLabel}
+          </Link>
+        </div>
+      )}
 
       {submitError && (
         <div className="banner-error" role="alert">

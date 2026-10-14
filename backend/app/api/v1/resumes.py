@@ -20,6 +20,7 @@ from app.core.errors import AppError
 from app.db.session import get_db
 from app.models.consent import ConsentType
 from app.models.resume_application import ResumeApplication, ResumeApplicationStatus
+from app.services.resume_context import apply_analysis
 from app.models.user import User, UserRole
 from app.schemas.resume import MyResumeStatusOut
 
@@ -123,6 +124,12 @@ async def submit_resume(
         status=ResumeApplicationStatus.pending,
         submitted_at=datetime.now(UTC),
     )
+    # 이력서 기반 맞춤 면접: 제출 시 글자를 추출해 요약만 암호화 저장한다. 실패해도 제출은 성공시키고
+    # 상태(unreadable)만 남긴다 — 면접 시작 단계에서 안내·차단한다.
+    try:
+        await run_in_threadpool(apply_analysis, application, file_bytes)
+    except Exception:  # noqa: BLE001
+        application.profile_status = "unreadable"
     db.add(application)
     db.commit()
     db.refresh(application)

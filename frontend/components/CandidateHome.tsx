@@ -18,6 +18,7 @@ import {
   getMyResumeStatus,
   listMyInterviews,
 } from "@/lib/api";
+import { APPLY_PATH, profileStatusWarning } from "@/lib/resumeGate.mjs";
 import styles from "./CandidateHome.module.css";
 
 // Feature J(2026-09-29 사용자 요청·확인): 이력서제출_합격통보_신규기능_요청프롬프트.md
@@ -154,6 +155,11 @@ export default function CandidateHome({ user, accessToken, onLogout, onSessionEx
           <Link href="/interviews/new" className={`submit-button ${styles.cta} ${isEmpty ? styles.ctaEmphasis : ""}`}>
             새 면접 시작
           </Link>
+        )}
+        {profileStatusWarning(resumeStatus) && (
+          <div className="banner-error" role="alert">
+            {profileStatusWarning(resumeStatus)} <Link href={APPLY_PATH}>이력서 다시 제출</Link>
+          </div>
         )}
       </section>
 
