@@ -14,7 +14,7 @@ step "1. 가상환경/의존성"
 [ -x "$BE/.venv/Scripts/python.exe" ] && PY="$BE/.venv/Scripts/python.exe" || PY="$BE/.venv/bin/python"
 if [ "${1:-}" != "--skip-install" ]; then
   "$PY" -m pip install -q -r "$BE/requirements.txt"   # pypdf 포함
-  for d in "$FE" "$AP"; do [ -d "$d" ] && [ ! -d "$d/node_modules" ] && (cd "$d" && npm install); done
+  for d in "$FE" "$AP"; do [ -d "$d" ] && (cd "$d" && npm install --no-audit --no-fund); done  # always: picks up newly added packages
 fi
 [ -f "$BE/.env" ] || { cp "$BE/.env.example" "$BE/.env"; echo "backend/.env 생성(JWT_SECRET_KEY 변경 권장)"; }
 [ -f "$FE/.env.local" ] || echo "NEXT_PUBLIC_API_BASE_URL=http://localhost:8001/api/v1" > "$FE/.env.local"

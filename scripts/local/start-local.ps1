@@ -32,8 +32,9 @@ if (-not $SkipInstall) {
   & $VenvPy -m pip install -q -r (Join-Path $Be "requirements.txt")
   if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
   foreach ($d in @($Fe, $Ap)) {
-    if ((Test-Path $d) -and -not (Test-Path (Join-Path $d "node_modules"))) {
-      Push-Location $d; npm install; Pop-Location
+    if (Test-Path $d) {
+      # always run: installs newly added packages (e.g. recharts) and is fast when already up to date
+      Push-Location $d; npm install --no-audit --no-fund; Pop-Location
     }
   }
 }
