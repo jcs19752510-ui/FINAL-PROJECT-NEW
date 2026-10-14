@@ -1,7 +1,21 @@
-<# 로컬 서버 종료. -Down 을 주면 DB/Redis 컨테이너도 내립니다(데이터 볼륨은 유지). #>
+﻿# Stop local dev servers. Add -Down to also stop the DB/Redis containers (data volumes are kept).
+# ASCII-only on purpose (Windows PowerShell 5.1 misreads UTF-8 without BOM).
 param([switch]$Down)
-foreach ($port in 8001, 3001, 3002) {
-  Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue; Write-Host "포트 $port 종료" }
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+foreach ($port in @(8001, 3001, 3002)) {
+  $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+  foreach ($c in $conns) {
+    Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+    Write-Host "stopped port $port"
+  }
 }
-Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -match "celery" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host "celery 워커 종료" }
-if ($Down) { Push-Location (Join-Path (Resolve-Path "$PSScriptRoot\..\..").Path "backend"); docker compose down; Pop-Location }
+$procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -match "celery" }
+foreach ($p in $procs) {
+  Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+  Write-Host "stopped celery worker"
+}
+if ($Down) {
+  Push-Location (Join-Path $Root "backend")
+  docker compose down
+  Pop-Location
+}
