@@ -26,9 +26,19 @@ import {
   getRecruiterResumeDetail,
   markResumeNotified,
   readAccessToken,
+  reanalyzeResume,
 } from "@/lib/api";
 import HomeLink from "@/components/HomeLink";
+import { AI_ADVISORY_NOTICE, aiBadge, formatScore } from "@/lib/screeningView.mjs";
 import styles from "../../recruiter.module.css";
+
+const AI_TONE_CLASS = {
+  pass: styles["aiTag--pass"],
+  fail: styles["aiTag--fail"],
+  pending: styles["aiTag--pending"],
+  failed: styles["aiTag--failed"],
+  none: styles["aiTag--none"],
+} as const;
 
 const STATUS_LABEL: Record<RecruiterResumeDetailOut["status"], string> = {
   pending: "심사 대기",
@@ -130,6 +140,8 @@ export default function RecruiterResumeDetailPage() {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken) {
@@ -193,6 +205,37 @@ export default function RecruiterResumeDetailPage() {
     handleDownload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, detail?.id]);
+
+  // AI 분석 대기 중이면 20초마다 상세를 다시 조회해 결과만 갱신한다(결정 입력란은 건드리지 않음).
+  const aiState = detail?.ai_state;
+  useEffect(() => {
+    if (aiState !== "pending" || !accessToken || !params.id) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      getRecruiterResumeDetail(accessToken, params.id)
+        .then((d) => {
+          if (!cancelled) setDetail(d);
+        })
+        .catch(() => {});
+    }, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [aiState, accessToken, params.id]);
+
+  async function handleReanalyze() {
+    if (!accessToken || !params.id || reanalyzing) return;
+    setReanalyzing(true);
+    setAiError(null);
+    try {
+      setDetail(await reanalyzeResume(accessToken, params.id));
+    } catch (err) {
+      setAiError(err instanceof ApiError ? err.message : "재분석 요청 중 오류가 발생했어요.");
+    } finally {
+      setReanalyzing(false);
+    }
+  }
 
   // 면접 일정은 합격 시에만 의미가 있어 "합격 처리" 버튼만 막는다(불합격은 무관).
   const scheduleIncomplete = (!!scheduleDate) !== (!!scheduleTime);
@@ -358,6 +401,112 @@ export default function RecruiterResumeDetailPage() {
           {actionError}
         </div>
       )}
+
+      <section style={{ marginTop: 24 }} aria-labelledby="ai-analysis-title">
+        <h2 id="ai-analysis-title">AI 이력서 분석</h2>
+        <p style={{ color: "var(--color-text-secondary)", fontSize: 13, margin: "0 0 8px" }}>{AI_ADVISORY_NOTICE}</p>
+        {aiError && (
+          <div className="banner-error" role="alert">
+            {aiError}
+          </div>
+        )}
+        {(() => {
+          const state = detail.ai_state ?? "no_criteria";
+          const badge = aiBadge(state, detail.ai_verdict, !!detail.ai_stale);
+          const reasons = detail.ai_reasons;
+          const hasResult = state === "done" || (state === "pending" && !!detail.ai_verdict);
+          return (
+            <>
+              {state === "no_criteria" && (
+                <p className={styles.emptyText} style={{ padding: "12px 0", textAlign: "left" }}>
+                  면접기준이 등록되지 않았어요. <Link href="/recruiter/criteria">면접기준 등록하러 가기</Link>
+                </p>
+              )}
+              {state === "pending" && (
+                <p className={styles.emptyText} style={{ padding: "12px 0", textAlign: "left" }} role="status">
+                  AI가 분석 중이거나 대기 중이에요. 1분마다 자동으로 확인합니다.
+                </p>
+              )}
+              {state === "failed" && (
+                <div className={styles.aiWarn} role="status">
+                  분석 실패: {detail.ai_error ?? "알 수 없는 오류"}
+                </div>
+              )}
+              {hasResult && (
+                <>
+                  <p style={{ margin: "8px 0" }}>
+                    <span className={`${styles.aiTag} ${AI_TONE_CLASS[badge.tone]}`}>{badge.label}</span>{" "}
+                    <strong>
+                      {typeof detail.ai_score === "number" ? `${Math.round(detail.ai_score)} / 100점` : formatScore(detail.ai_score)}
+                    </strong>
+                    {typeof detail.ai_threshold === "number" && ` (합격선 ${detail.ai_threshold}점)`}
+                  </p>
+                  <p style={{ fontSize: 13, color: "var(--color-text-secondary)", margin: "4px 0" }}>
+                    점검일시 {formatDateTime(detail.ai_analyzed_at ?? null)}
+                    {typeof detail.ai_criteria_version === "number" && ` · 기준 v${detail.ai_criteria_version}로 분석`}
+                  </p>
+                  {detail.ai_stale && (
+                    <div className={styles.aiWarn} role="status">
+                      이전 결과 · 재분석 대기
+                      {typeof detail.current_criteria_version === "number" && ` (현재 기준 v${detail.current_criteria_version} · 재분석 대기 중)`}
+                    </div>
+                  )}
+                  {reasons && (
+                    <>
+                      <p style={{ whiteSpace: "pre-wrap" }}>{reasons.summary}</p>
+                      {reasons.criteria.length > 0 && (
+                        <table className={styles.table}>
+                          <thead>
+                            <tr>
+                              <th>기준</th>
+                              <th>점수</th>
+                              <th>근거</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reasons.criteria.map((c, i) => (
+                              <tr key={`${c.name}-${i}`}>
+                                <td>{c.name}</td>
+                                <td>{c.score}점</td>
+                                <td>{c.evidence}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {reasons.strengths.length > 0 && (
+                        <>
+                          <h3 style={{ fontSize: 14, marginBottom: 0 }}>강점</h3>
+                          <ul className={styles.aiList}>
+                            {reasons.strengths.map((t, i) => (
+                              <li key={i}>{t}</li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                      {reasons.concerns.length > 0 && (
+                        <>
+                          <h3 style={{ fontSize: 14, marginBottom: 0 }}>우려</h3>
+                          <ul className={styles.aiList}>
+                            {reasons.concerns.map((t, i) => (
+                              <li key={i}>{t}</li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+              {state !== "no_criteria" && (
+                <button type="button" className="submit-button" style={{ width: "auto" }} disabled={reanalyzing} onClick={handleReanalyze}>
+                  {reanalyzing ? "요청 중..." : "다시 분석"}
+                </button>
+              )}
+            </>
+          );
+        })()}
+      </section>
 
       <section style={{ marginTop: 24 }}>
         <h2>합격/불합격 결정</h2>

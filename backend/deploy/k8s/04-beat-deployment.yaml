@@ -1,0 +1,40 @@
+# 2026-10-14 — Celery beat 스케줄러. 매시간 삭제요청 처리, 매일 보관기간 파기, 매분 이력서 AI 합격 판정 배치
+# (`app/services/celery_app.py` beat_schedule)를 트리거한다. 스케줄만 발행하고 실제 태스크는
+# 03-worker-deployment.yaml 의 워커(-Q ai_pipeline)가 소비한다.
+# **replicas=1 고정** — beat 를 2개 이상 띄우면 같은 태스크가 중복 발행된다. GPU/볼륨은 필요 없다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-beat
+  namespace: mock-interview
+spec:
+  replicas: 1  # 위 주석 참고 — 임의로 늘리면 안 됨
+  strategy:
+    type: Recreate  # 롤링 업데이트 중 beat 2개가 잠시 공존하는 것을 막는다
+  selector:
+    matchLabels:
+      app: celery-beat
+  template:
+    metadata:
+      labels:
+        app: celery-beat
+    spec:
+      containers:
+        - name: celery-beat
+          image: REPLACE_ME_REGISTRY/mock-interview-backend:REPLACE_ME_TAG
+          command:
+            - celery
+            - -A
+            - app.services.celery_app
+            - beat
+            - --loglevel=info
+            - -s
+            - /tmp/celerybeat-schedule  # 쓰기 가능한 임시 경로(스케줄은 코드에 있어 재시작 시 유실돼도 무방)
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }

@@ -28,6 +28,8 @@ step "4. 서버 기동"
 launch(){ name="$1"; dir="$2"; shift 2; (cd "$dir" && PYTHONIOENCODING=utf-8 nohup "$@" >"$RUN/$name.log" 2>&1 & echo $! >"$RUN/$name.pid"); echo "  $name pid=$(cat "$RUN/$name.pid")"; }
 launch backend "$BE" "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 launch worker  "$BE" "$PY" -m celery -A app.services.celery_app worker --concurrency=1 --pool=solo -Q ai_pipeline
+mkdir -p "$BE/var"
+launch beat    "$BE" "$PY" -m celery -A app.services.celery_app beat --loglevel=info -s var/celerybeat-schedule
 launch frontend "$FE" npm run dev -- --port 3001
 [ -d "$AP" ] && launch apply "$AP" npm run dev -- --port 3002
 

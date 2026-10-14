@@ -224,3 +224,75 @@
   cursor: pointer;
   padding: 0;
 }
+
+.textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  resize: vertical;
+}
+
+.charCounter {
+  text-align: right;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+
+/* AI 판정 배지: 글자 라벨을 항상 함께 표시(색만으로 구분하지 않음) */
+.aiTag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.aiTag--pass {
+  background: #e3f4e8;
+  color: #17602f;
+  border-color: #a8d9b8;
+}
+
+.aiTag--fail {
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+  border-color: #efb4b4;
+}
+
+.aiTag--pending,
+.aiTag--none {
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+
+.aiTag--failed {
+  background: #fdeedd;
+  color: #8a4b08;
+  border-color: #f0c999;
+}
+
+.aiWarn {
+  background: #fdeedd;
+  color: #8a4b08;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.aiList {
+  margin: 4px 0 12px;
+  padding-left: 20px;
+  font-size: 14px;
+}

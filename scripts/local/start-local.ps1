@@ -1,6 +1,6 @@
 ﻿<#
  Local dev server launcher (Windows PowerShell 5.1 / 7). Run from anywhere in the repo.
-   .\scripts\local\start-local.ps1                 # DB/Redis -> migrate -> backend -> worker -> frontend
+   .\scripts\local\start-local.ps1                 # DB/Redis -> migrate -> backend -> worker + beat -> frontend
    .\scripts\local\start-local.ps1 -SkipInstall    # skip dependency install (faster restart)
  Ports: backend 8001 / frontend 3001 / resume portal 3002 / DB 5544 / Redis 6389
  NOTE: this file is ASCII-only on purpose (Windows PowerShell 5.1 misreads UTF-8 without BOM).
@@ -67,7 +67,7 @@ $mig = $LASTEXITCODE
 Pop-Location
 if ($mig -ne 0) { throw "migration failed" }
 
-Step "4. Start backend(8001), worker, frontend(3001), resume portal(3002) in separate windows"
+Step "4. Start backend(8001), worker, beat (AI resume screening), frontend(3001), resume portal(3002) in separate windows"
 function Launch([string]$title, [string]$dir, [string]$cmd) {
   $full = "`$host.UI.RawUI.WindowTitle = '$title'; `$env:PYTHONIOENCODING = 'utf-8'; Set-Location '$dir'; $cmd"
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($full))
@@ -75,6 +75,8 @@ function Launch([string]$title, [string]$dir, [string]$cmd) {
 }
 Launch "backend-8001" $Be "& '$VenvPy' -m uvicorn app.main:app --host 127.0.0.1 --port 8001"
 Launch "worker" $Be "& '$VenvPy' -m celery -A app.services.celery_app worker --concurrency=1 --pool=solo -Q ai_pipeline"
+New-Item -ItemType Directory -Force -Path (Join-Path $Be "var") | Out-Null
+Launch "beat" $Be "& '$VenvPy' -m celery -A app.services.celery_app beat --loglevel=info -s var/celerybeat-schedule"
 Launch "frontend-3001" $Fe "npm run dev -- --port 3001"
 if ((-not $NoApply) -and (Test-Path $Ap)) {
   Launch "apply-3002" $Ap "npm run dev -- --port 3002"

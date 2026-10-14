@@ -36,6 +36,7 @@ from app.models.interview import Interview  # noqa: F401  # 메타데이터 등�
 from app.models.question import Question  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.resume_application import ResumeApplication  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.rubric_template import RubricTemplate  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.screening_criteria import ScreeningCriteria  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.transcript import Transcript  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.user import User  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.whiteboard import WhiteboardSnapshot  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
@@ -44,7 +45,7 @@ celery_app = Celery(
     "ai_interview_worker",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.worker.tasks", "app.worker.deletion_tasks"],
+    include=["app.worker.tasks", "app.worker.deletion_tasks", "app.worker.screening_tasks"],
 )
 
 celery_app.conf.update(
@@ -62,6 +63,11 @@ celery_app.conf.update(
         "purge-expired-data-daily": {
             "task": "app.worker.deletion_tasks.purge_expired_data",
             "schedule": crontab(hour=3, minute=0),
+        },
+        # 2026-10-14 이력서 AI 합격 판정: 1분마다 "현재 면접기준으로 미분석" 이력서를 순차 처리
+        "screen-pending-resumes-every-minute": {
+            "task": "app.worker.screening_tasks.screen_pending_resumes",
+            "schedule": crontab(minute="*"),
         },
     },
 )

@@ -14,6 +14,7 @@ from app.models.interview import Interview  # noqa: F401  # 메타데이터 등�
 from app.models.question import Question  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.resume_application import ResumeApplication  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.rubric_template import RubricTemplate  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
+from app.models.screening_criteria import ScreeningCriteria  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.transcript import Transcript  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.user import User  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요
 from app.models.whiteboard import WhiteboardSnapshot  # noqa: F401  # 메타데이터 등록을 위해 임포트 필요

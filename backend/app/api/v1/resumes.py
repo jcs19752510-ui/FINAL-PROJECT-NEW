@@ -5,6 +5,7 @@
 §2 결정#1에 따라 백엔드 자체는 별도 앱/포트로 분리하지 않는다 — 기존
 `/api/v1`(현재 8001 포트) 그대로 새 라우트만 추가한다.
 """
+import logging
 import os
 import uuid
 from datetime import UTC, datetime
@@ -20,9 +21,12 @@ from app.core.errors import AppError
 from app.db.session import get_db
 from app.models.consent import ConsentType
 from app.models.resume_application import ResumeApplication, ResumeApplicationStatus
-from app.services.resume_context import apply_analysis
 from app.models.user import User, UserRole
 from app.schemas.resume import MyResumeStatusOut
+from app.services import job_queue
+from app.services.resume_context import apply_analysis
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["resumes"])
 
@@ -123,6 +127,15 @@ async def submit_resume(
         file_size_bytes=len(file_bytes),
         status=ResumeApplicationStatus.pending,
         submitted_at=datetime.now(UTC),
+        ai_status=None,
+        ai_verdict=None,
+        ai_score=None,
+        ai_threshold=None,
+        ai_reasons_json=None,
+        ai_criteria_version=None,
+        ai_analyzed_at=None,
+        ai_error=None,
+        ai_attempts=0,
     )
     # 이력서 기반 맞춤 면접: 제출 시 글자를 추출해 요약만 암호화 저장한다. 실패해도 제출은 성공시키고
     # 상태(unreadable)만 남긴다 — 면접 시작 단계에서 안내·차단한다.
@@ -133,6 +146,10 @@ async def submit_resume(
     db.add(application)
     db.commit()
     db.refresh(application)
+    try:
+        job_queue.enqueue_screening_job(str(application.id))
+    except Exception:  # noqa: BLE001 — 브로커 장애여도 제출은 성공, 1분 배치가 보완
+        logger.warning("screening enqueue failed for %s", application.id, exc_info=True)
     return application
 
 

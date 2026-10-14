@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 const TABS = [
   { href: "/recruiter/resumes", label: "이력서 검토" },
+  { href: "/recruiter/criteria", label: "면접기준" },
   { href: "/recruiter", label: "지원자 리포트" },
   { href: "/recruiter/process-guide", label: "제출 절차 안내" },
   { href: "/recruiter/add-recruiter", label: "채용담당자 추가" },

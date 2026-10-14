@@ -7,27 +7,35 @@
 이력서에도 그대로 적용한다(요청 프롬프트 §4-2가 명시한 대로, 구현 착수 시
 재확인 없이 기존 정책 재사용 — recruiter 전원이 모든 이력서를 열람 가능).
 """
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.api.v1.recruiter import _require_recruiter
+from app.api.v1.screening import current_criteria_version
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models.resume_application import ResumeApplication, ResumeApplicationStatus
 from app.models.user import User
 from app.schemas.resume import (
+    AiReasonsOut,
     NotificationDraftOut,
     RecruiterResumeDetailOut,
     RecruiterResumeListItemOut,
     ResumeDecisionIn,
 )
+from app.services import job_queue
 from app.services.email_service import EmailSendError, email_configured, send_notification_email
+from app.services.screening_state import compute_ai_view
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recruiter", tags=["recruiter-resumes"])
 
@@ -76,41 +84,18 @@ def _get_application_or_404(db: Session, application_id: UUID) -> tuple[ResumeAp
     return row
 
 
-@router.get("/resumes", response_model=list[RecruiterResumeListItemOut])
-def list_resumes(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> list[RecruiterResumeListItemOut]:
-    _require_recruiter(current_user)
-    rows = db.execute(
-        select(ResumeApplication, User)
-        .join(User, ResumeApplication.candidate_id == User.id)
-        .order_by(ResumeApplication.submitted_at.desc())
-    ).all()
-    return [
-        RecruiterResumeListItemOut(
-            id=app_.id,
-            candidate_id=candidate.id,
-            candidate_name=candidate.name,
-            candidate_email=candidate.email,
-            status=app_.status,
-            original_filename=app_.original_filename,
-            submitted_at=app_.submitted_at,
-            reviewed_at=app_.reviewed_at,
-            notified_at=app_.notified_at,
-        )
-        for app_, candidate in rows
-    ]
+def _list_ai_fields(view: dict) -> dict:
+    return {k: view[k] for k in ("ai_state", "ai_verdict", "ai_score", "ai_analyzed_at")}
 
 
-@router.get("/resumes/{application_id}", response_model=RecruiterResumeDetailOut)
-def get_resume_detail(
-    application_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> RecruiterResumeDetailOut:
-    _require_recruiter(current_user)
-    app_, candidate = _get_application_or_404(db, application_id)
+def _detail_out(db: Session, app_: ResumeApplication, candidate: User) -> RecruiterResumeDetailOut:
+    version = current_criteria_version(db)
+    view = compute_ai_view(app_, version)
+    reasons = view.pop("ai_reasons")
+    try:
+        parsed = AiReasonsOut.model_validate(reasons) if reasons is not None else None
+    except ValidationError:
+        parsed = None
     return RecruiterResumeDetailOut(
         id=app_.id,
         candidate_id=candidate.id,
@@ -125,7 +110,50 @@ def get_resume_detail(
         file_size_bytes=app_.file_size_bytes,
         decision_note=app_.decision_note,
         interview_schedule_note=app_.interview_schedule_note,
+        current_criteria_version=version,
+        ai_reasons=parsed,
+        **view,
     )
+
+
+@router.get("/resumes", response_model=list[RecruiterResumeListItemOut])
+def list_resumes(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[RecruiterResumeListItemOut]:
+    _require_recruiter(current_user)
+    rows = db.execute(
+        select(ResumeApplication, User)
+        .join(User, ResumeApplication.candidate_id == User.id)
+        .order_by(ResumeApplication.submitted_at.desc())
+    ).all()
+    version = current_criteria_version(db)
+    return [
+        RecruiterResumeListItemOut(
+            id=app_.id,
+            candidate_id=candidate.id,
+            candidate_name=candidate.name,
+            candidate_email=candidate.email,
+            status=app_.status,
+            original_filename=app_.original_filename,
+            submitted_at=app_.submitted_at,
+            reviewed_at=app_.reviewed_at,
+            notified_at=app_.notified_at,
+            **_list_ai_fields(compute_ai_view(app_, version)),
+        )
+        for app_, candidate in rows
+    ]
+
+
+@router.get("/resumes/{application_id}", response_model=RecruiterResumeDetailOut)
+def get_resume_detail(
+    application_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RecruiterResumeDetailOut:
+    _require_recruiter(current_user)
+    app_, candidate = _get_application_or_404(db, application_id)
+    return _detail_out(db, app_, candidate)
 
 
 @router.get("/resumes/{application_id}/file")
@@ -183,21 +211,7 @@ def decide_resume(
         except EmailSendError:
             pass  # send_notification_email이 이미 경고 로그를 남겼다.
 
-    return RecruiterResumeDetailOut(
-        id=app_.id,
-        candidate_id=candidate.id,
-        candidate_name=candidate.name,
-        candidate_email=candidate.email,
-        status=app_.status,
-        original_filename=app_.original_filename,
-        submitted_at=app_.submitted_at,
-        reviewed_at=app_.reviewed_at,
-        notified_at=app_.notified_at,
-        content_type=app_.content_type,
-        file_size_bytes=app_.file_size_bytes,
-        decision_note=app_.decision_note,
-        interview_schedule_note=app_.interview_schedule_note,
-    )
+    return _detail_out(db, app_, candidate)
 
 
 @router.get("/resumes/{application_id}/notification-draft", response_model=NotificationDraftOut)
@@ -239,18 +253,26 @@ def mark_resume_notified(
     db.commit()
     db.refresh(app_)
 
-    return RecruiterResumeDetailOut(
-        id=app_.id,
-        candidate_id=candidate.id,
-        candidate_name=candidate.name,
-        candidate_email=candidate.email,
-        status=app_.status,
-        original_filename=app_.original_filename,
-        submitted_at=app_.submitted_at,
-        reviewed_at=app_.reviewed_at,
-        notified_at=app_.notified_at,
-        content_type=app_.content_type,
-        file_size_bytes=app_.file_size_bytes,
-        decision_note=app_.decision_note,
-        interview_schedule_note=app_.interview_schedule_note,
-    )
+    return _detail_out(db, app_, candidate)
+
+
+@router.post("/resumes/{application_id}/ai-reanalyze", response_model=RecruiterResumeDetailOut)
+def reanalyze_resume(
+    application_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RecruiterResumeDetailOut:
+    """AI 판정 재분석 요청 — 상태를 초기화하고 즉시 큐에 올린다(실패해도 1분 배치가 처리)."""
+    _require_recruiter(current_user)
+    app_, candidate = _get_application_or_404(db, application_id)
+    if current_criteria_version(db) == 0:
+        raise AppError(409, "SCREENING_CRITERIA_MISSING", "Conflict", "면접기준이 등록되지 않았습니다.")
+    app_.ai_status = None
+    app_.ai_attempts = 0
+    db.commit()
+    db.refresh(app_)
+    try:
+        job_queue.enqueue_screening_job(str(app_.id))
+    except Exception:  # noqa: BLE001
+        logger.warning("screening enqueue failed for %s; batch will pick it up", app_.id, exc_info=True)
+    return _detail_out(db, app_, candidate)

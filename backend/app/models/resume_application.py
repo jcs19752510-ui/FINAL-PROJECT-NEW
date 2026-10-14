@@ -73,3 +73,15 @@ class ResumeApplication(Base):
     profile_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     # 핵심 요약(JSON)만 암호화 저장. 원문 전체는 저장하지 않는다.
     profile_json: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
+    # 2026-10-14 이력서 AI 합격 판정(면접담당자 전용 — 지원자 응답에는 절대 노출하지 않는다).
+    # ai_status: NULL(미분석) / done / failed. ai_verdict: pass / fail. 점수 0~100.
+    ai_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    ai_verdict: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ai_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 판정 당시 합격선
+    # {"summary": str, "criteria": [{"name","score","evidence"}], "strengths": [str], "concerns": [str]}
+    ai_reasons_json: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
+    ai_criteria_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ai_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    ai_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
