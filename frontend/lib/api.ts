@@ -723,6 +723,7 @@ export interface RecruiterResumeListItemOut {
   ai_state?: AiState;
   ai_verdict?: AiVerdict | null;
   ai_score?: number | null;
+  ai_threshold?: number | null; // 분석 당시 합격선
   ai_analyzed_at?: string | null;
 }
 

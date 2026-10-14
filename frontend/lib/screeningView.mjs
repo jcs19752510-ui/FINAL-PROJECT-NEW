@@ -86,6 +86,15 @@ export function aiBadge(state, verdict, stale = false) {
   return { label: "기준 미등록", tone: "none" };
 }
 
+/**
+ * 목록의 AI 합격선(분석 당시 합격선). 값이 없으면 "-".
+ * @param {number | null | undefined} threshold
+ */
+export function formatThreshold(threshold) {
+  if (typeof threshold !== "number" || !Number.isFinite(threshold)) return "-";
+  return `${Math.round(threshold)}점`;
+}
+
 /** @param {number | null | undefined} score */
 export function formatScore(score) {
   if (typeof score !== "number" || !Number.isFinite(score)) return "-";

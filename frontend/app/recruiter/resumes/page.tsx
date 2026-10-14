@@ -19,7 +19,7 @@ import {
 } from "@/lib/api";
 import HomeLink from "@/components/HomeLink";
 import RecruiterListTabs from "@/components/RecruiterListTabs";
-import { aiBadge, formatScore } from "@/lib/screeningView.mjs";
+import { aiBadge, formatScore, formatThreshold } from "@/lib/screeningView.mjs";
 import styles from "../recruiter.module.css";
 
 const AI_TONE_CLASS = {
@@ -145,6 +145,7 @@ export default function RecruiterResumesPage() {
               <th>상태</th>
               <th>AI 합격상태</th>
               <th>AI 점수</th>
+              <th>AI 합격선(점)</th>
               <th>AI 점검일시</th>
               <th>제출일시</th>
               <th>심사일시</th>
@@ -166,6 +167,7 @@ export default function RecruiterResumesPage() {
                   })()}
                 </td>
                 <td>{formatScore(r.ai_score)}</td>
+                <td>{formatThreshold(r.ai_threshold)}</td>
                 <td>{formatDateTime(r.ai_analyzed_at ?? null)}</td>
                 <td>{formatDateTime(r.submitted_at)}</td>
                 <td>{formatDateTime(r.reviewed_at)}</td>

@@ -50,11 +50,11 @@ class RecruiterResumeListItemOut(BaseModel):
     ai_state: str = "no_criteria"
     ai_verdict: str | None = None
     ai_score: int | None = None
+    ai_threshold: int | None = None  # 이 이력서를 분석할 당시의 합격선(판정과 항상 일치)
     ai_analyzed_at: datetime | None = None
 
 
 class RecruiterResumeDetailOut(RecruiterResumeListItemOut):
-    ai_threshold: int | None = None
     ai_criteria_version: int | None = None
     current_criteria_version: int = 0
     ai_stale: bool = False

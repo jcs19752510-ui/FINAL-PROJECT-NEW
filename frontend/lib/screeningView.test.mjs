@@ -7,6 +7,7 @@ import {
   aiBadge,
   describeCriteriaLoadError,
   formatScore,
+  formatThreshold,
   isDirty,
   validateCriteriaInput,
 } from "./screeningView.mjs";
@@ -88,4 +89,12 @@ test("불러오기 실패 안내: 404는 서버 재시작을 안내한다", () =
   assert.match(describeCriteriaLoadError(403, "x"), /채용담당자/);
   assert.equal(describeCriteriaLoadError(500, "서버 오류"), "서버 오류");
   assert.equal(describeCriteriaLoadError(500, ""), "면접기준을 불러오지 못했어요.");
+});
+
+test("합격선 표시: 값이 있으면 N점, 없으면 -", () => {
+  assert.equal(formatThreshold(70), "70점");
+  assert.equal(formatThreshold(65.4), "65점");
+  assert.equal(formatThreshold(null), "-");
+  assert.equal(formatThreshold(undefined), "-");
+  assert.equal(formatThreshold(Number.NaN), "-");
 });

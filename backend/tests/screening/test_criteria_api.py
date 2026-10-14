@@ -161,6 +161,20 @@ def test_put_resets_attempts(env):
         assert db.execute(text("SELECT ai_attempts FROM resume_applications WHERE id=:i"), {"i": aid}).scalar() == 2
 
 
+def test_list_shows_threshold_used_at_analysis(env):
+    """목록의 합격선은 '현재 기준'이 아니라 그 이력서를 분석할 당시의 합격선이다."""
+    aid = add_app(env, ai_status="done", ai_verdict="pass", ai_score=68, ai_threshold=65, ai_criteria_version=1)
+    put(env, "기준", 70)  # 현재 합격선은 70이지만 이 행은 65로 판정됨
+    row = [x for x in env["c"].get(f"{BASE}/resumes").json() if x["id"] == str(aid)][0]
+    assert row["ai_threshold"] == 65 and row["ai_score"] == 68 and row["ai_verdict"] == "pass"
+    assert env["c"].get(f"{BASE}/resumes/{aid}").json()["ai_threshold"] == 65  # 상세와 일치
+    with SessionLocal() as db:  # 미분석 상태
+        db.execute(text("UPDATE resume_applications SET ai_status=NULL, ai_verdict=NULL, ai_score=NULL, ai_threshold=NULL WHERE id=:i"), {"i": aid})
+        db.commit()
+    row = [x for x in env["c"].get(f"{BASE}/resumes").json() if x["id"] == str(aid)][0]
+    assert row["ai_threshold"] is None
+
+
 def test_states_list_and_detail(env):
     aid = add_app(env, ai_status="done", ai_verdict="pass", ai_score=88, ai_threshold=70, ai_criteria_version=1)
     set_reasons(aid, json.dumps(REASONS, ensure_ascii=False))

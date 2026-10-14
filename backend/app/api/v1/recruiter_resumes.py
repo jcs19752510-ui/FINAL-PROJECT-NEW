@@ -85,7 +85,7 @@ def _get_application_or_404(db: Session, application_id: UUID) -> tuple[ResumeAp
 
 
 def _list_ai_fields(view: dict) -> dict:
-    return {k: view[k] for k in ("ai_state", "ai_verdict", "ai_score", "ai_analyzed_at")}
+    return {k: view[k] for k in ("ai_state", "ai_verdict", "ai_score", "ai_threshold", "ai_analyzed_at")}
 
 
 def _detail_out(db: Session, app_: ResumeApplication, candidate: User) -> RecruiterResumeDetailOut:
