@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { aiBadge, formatScore, isDirty, validateCriteriaInput } from "./screeningView.mjs";
+import {
+  CRITERIA_MAX_LENGTH,
+  DEFAULT_CRITERIA_TEMPLATE,
+  aiBadge,
+  describeCriteriaLoadError,
+  formatScore,
+  isDirty,
+  validateCriteriaInput,
+} from "./screeningView.mjs";
 
 test("배지: 완료 합격/불합격", () => {
   assert.deepEqual(aiBadge("done", "pass"), { label: "AI 합격", tone: "pass" });
@@ -52,4 +60,32 @@ test("변경 여부", () => {
   assert.equal(isDirty(saved, { text: "abc  ", threshold: "70" }), false);
   assert.equal(isDirty(saved, { text: "abcd", threshold: 70 }), true);
   assert.equal(isDirty(saved, { text: "abc", threshold: 80 }), true);
+});
+
+test("기본 예시: 4000자 이하이고 검증을 통과한다", () => {
+  assert.ok(DEFAULT_CRITERIA_TEMPLATE.length > 500);
+  assert.ok(DEFAULT_CRITERIA_TEMPLATE.length <= CRITERIA_MAX_LENGTH);
+  assert.deepEqual(validateCriteriaInput({ text: DEFAULT_CRITERIA_TEMPLATE, threshold: 70 }), { ok: true });
+});
+
+test("기본 예시: 경력 5년·바이브코딩·2026년 10월·필수 조건·배점 합계 100", () => {
+  const t = DEFAULT_CRITERIA_TEMPLATE;
+  for (const word of ["5년 이상", "바이브코딩", "2026년 10월", "[필수 조건]", "[감점 요인]", "RAG", "Claude Code"]) {
+    assert.ok(t.includes(word), `${word} 누락`);
+  }
+  const points = [...t.matchAll(/^\d+\. .*\((\d+)점\)$/gm)].map((m) => Number(m[1]));
+  assert.equal(points.length, 6);
+  assert.equal(points.reduce((a, b) => a + b, 0), 100);
+});
+
+test("기본 예시: 저장본이 비어 있으면 변경됨으로 판단해 등록할 수 있다", () => {
+  assert.equal(isDirty({ text: "", threshold: 70 }, { text: DEFAULT_CRITERIA_TEMPLATE, threshold: "70" }), true);
+});
+
+test("불러오기 실패 안내: 404는 서버 재시작을 안내한다", () => {
+  assert.match(describeCriteriaLoadError(404, "Not Found"), /재시작/);
+  assert.match(describeCriteriaLoadError(undefined, undefined), /8001/);
+  assert.match(describeCriteriaLoadError(403, "x"), /채용담당자/);
+  assert.equal(describeCriteriaLoadError(500, "서버 오류"), "서버 오류");
+  assert.equal(describeCriteriaLoadError(500, ""), "면접기준을 불러오지 못했어요.");
 });

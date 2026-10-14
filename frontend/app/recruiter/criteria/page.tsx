@@ -22,7 +22,9 @@ import RecruiterListTabs from "@/components/RecruiterListTabs";
 import {
   AI_ADVISORY_NOTICE,
   CRITERIA_MAX_LENGTH,
+  DEFAULT_CRITERIA_TEMPLATE,
   THRESHOLD_DEFAULT,
+  describeCriteriaLoadError,
   isDirty,
   validateCriteriaInput,
 } from "@/lib/screeningView.mjs";
@@ -69,10 +71,22 @@ export default function RecruiterCriteriaPage() {
       .finally(() => setAuthLoading(false));
   }, [accessToken, router]);
 
+  const [reloadKey, setReloadKey] = useState(0);
+  const [draftFromTemplate, setDraftFromTemplate] = useState(false);
+
   function applySaved(c: ScreeningCriteriaOut) {
     setSaved(c);
-    setText(c.criteria_text);
-    setThreshold(String(c.version === 0 ? THRESHOLD_DEFAULT : c.pass_threshold));
+    setLoadError(null);
+    if (c.version === 0) {
+      // 한 번도 등록된 적 없으면 기본 예시를 초안으로 채워 둔다(저장 전까지는 DB에 반영되지 않음).
+      setText(DEFAULT_CRITERIA_TEMPLATE);
+      setThreshold(String(THRESHOLD_DEFAULT));
+      setDraftFromTemplate(true);
+    } else {
+      setText(c.criteria_text);
+      setThreshold(String(c.pass_threshold));
+      setDraftFromTemplate(false);
+    }
   }
 
   useEffect(() => {
@@ -80,9 +94,21 @@ export default function RecruiterCriteriaPage() {
     getScreeningCriteria(accessToken)
       .then(applySaved)
       .catch((err: unknown) => {
-        setLoadError(err instanceof ApiError ? err.message : "네트워크 오류로 면접기준을 가져오지 못했어요.");
+        setLoadError(
+          err instanceof ApiError
+            ? describeCriteriaLoadError(err.status, err.message)
+            : describeCriteriaLoadError(undefined, undefined),
+        );
       });
-  }, [accessToken, user]);
+  }, [accessToken, user, reloadKey]);
+
+  function handleLoadTemplate() {
+    if (text.trim() && text.trim() !== DEFAULT_CRITERIA_TEMPLATE.trim()) {
+      if (!window.confirm("입력한 내용이 기본 예시로 바뀝니다. 계속할까요?")) return;
+    }
+    setText(DEFAULT_CRITERIA_TEMPLATE);
+    setDraftFromTemplate(true);
+  }
 
   const registered = !!saved && saved.version > 0;
   const validation = validateCriteriaInput({ text, threshold });
@@ -165,7 +191,15 @@ export default function RecruiterCriteriaPage() {
 
       {loadError && (
         <div className="banner-error" role="alert" style={{ marginBottom: 16 }}>
-          {loadError}
+          {loadError}{" "}
+          <button
+            type="button"
+            className="submit-button"
+            style={{ width: "auto", display: "inline-block", marginTop: 8, padding: "6px 16px" }}
+            onClick={() => setReloadKey((k) => k + 1)}
+          >
+            다시 불러오기
+          </button>
         </div>
       )}
 
@@ -173,13 +207,21 @@ export default function RecruiterCriteriaPage() {
         <div className={styles.skeleton} aria-busy="true">
           면접기준을 불러오는 중이에요...
         </div>
-      ) : saved ? (
+      ) : (
         <>
           <p style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
-            {registered
-              ? `현재 기준 v${saved.version} · 마지막 수정 ${formatDateTime(saved.updated_at)} ${saved.updated_by_name ?? ""}`.trim()
-              : "아직 등록된 면접기준이 없어요."}
+            {!saved
+              ? "서버에 연결되면 저장할 수 있어요. 지금은 내용을 미리 작성해 둘 수 있어요."
+              : registered
+                ? `현재 기준 v${saved.version} · 마지막 수정 ${formatDateTime(saved.updated_at)} ${saved.updated_by_name ?? ""}`.trim()
+                : "아직 등록된 면접기준이 없어요."}
           </p>
+          {draftFromTemplate && saved && (
+            <div className="banner-info" role="status" style={{ marginBottom: 16 }}>
+              기본 예시(AI·IT 개발자 경력 5년 이상, 바이브코딩 가능자 포함)가 채워져 있어요. 내용을 확인·수정한 뒤 <b>{registered ? "수정" : "등록"}</b> 버튼을
+              눌러야 저장되고 AI 분석이 시작됩니다.
+            </div>
+          )}
 
           {saveError && (
             <div className="banner-error" role="alert" style={{ marginBottom: 16 }}>
@@ -197,7 +239,7 @@ export default function RecruiterCriteriaPage() {
             <textarea
               id="criteria-text"
               className={styles.textarea}
-              rows={14}
+              rows={22}
               maxLength={CRITERIA_MAX_LENGTH}
               value={text}
               placeholder={PLACEHOLDER}
@@ -224,11 +266,16 @@ export default function RecruiterCriteriaPage() {
 
           {text.trim() && !validation.ok && dirty && <div className="field-error">{validation.error}</div>}
 
-          <button type="button" className="submit-button" disabled={saveDisabled} onClick={handleSave}>
-            {saving ? "저장 중..." : registered ? "수정" : "등록"}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" className="submit-button" disabled={saveDisabled} onClick={handleSave}>
+              {saving ? "저장 중..." : registered ? "수정" : "등록"}
+            </button>
+            <button type="button" className="submit-button" style={{ background: "var(--color-surface)", color: "var(--color-text-primary)", border: "1px solid var(--color-border)" }} onClick={handleLoadTemplate}>
+              기본 예시 불러오기
+            </button>
+          </div>
         </>
-      ) : null}
+      )}
     </div>
   );
 }
