@@ -16,6 +16,7 @@ from app.api.v1.recruiter import router as recruiter_router
 from app.api.v1.recruiter_final_decision import router as recruiter_final_decision_router
 from app.api.v1.recruiter_resumes import router as recruiter_resumes_router
 from app.api.v1.resumes import router as resumes_router
+from app.api.v1.screening import router as screening_router
 from app.api.v1.webcam_emotion import router as webcam_emotion_router
 from app.api.v1.webrtc_signaling import router as webrtc_signaling_router
 from app.api.v1.whiteboard import router as whiteboard_router
@@ -130,6 +131,7 @@ app.include_router(recruiter_router, prefix="/api/v1")
 app.include_router(recruiter_final_decision_router, prefix="/api/v1")
 app.include_router(recruiter_resumes_router, prefix="/api/v1")
 app.include_router(resumes_router, prefix="/api/v1")
+app.include_router(screening_router, prefix="/api/v1")
 app.include_router(webcam_emotion_router, prefix="/api/v1")
 app.include_router(whiteboard_router, prefix="/api/v1")
 # 03-system-design.md §4.3: WebSocket 경로는 `/api/v1` 프리픽스 없이 `/ws/interviews/{id}`.

@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     interruption_enabled: bool = True
     # 2026-10-14: 이력서 기반 맞춤 면접(첫 질문·후속 질문). 켜져 있으면 이력서 없음/판독 불가 시 면접 시작을 막는다.
     resume_personalization_enabled: bool = True
+    # 2026-10-14: 이력서 AI 합격/불합격 판정(면접담당자 전용 참고 정보). 끄면 enqueue·배치 모두 건너뛴다.
+    screening_enabled: bool = True
+    screening_batch_size: int = Field(default=5, ge=1)  # 1분 배치 1회당 처리 이력서 수(GPU 1대 직렬)
+    screening_llm_timeout_seconds: int = Field(default=120, ge=1)
+    screening_max_tokens: int = Field(default=700, ge=100)
     interrupt_max_answer_seconds: float = Field(default=120.0, gt=0)
     interrupt_off_topic_min_seconds: float = Field(default=30.0, ge=0)
     interrupt_off_topic_min_words: int = Field(default=25, ge=1)

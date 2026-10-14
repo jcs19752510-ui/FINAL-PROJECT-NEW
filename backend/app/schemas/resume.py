@@ -24,6 +24,19 @@ class MyResumeStatusOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AiCriterionOut(BaseModel):
+    name: str
+    score: int
+    evidence: str
+
+
+class AiReasonsOut(BaseModel):
+    summary: str = ""
+    criteria: list[AiCriterionOut] = []
+    strengths: list[str] = []
+    concerns: list[str] = []
+
+
 class RecruiterResumeListItemOut(BaseModel):
     id: UUID
     candidate_id: UUID
@@ -34,9 +47,19 @@ class RecruiterResumeListItemOut(BaseModel):
     submitted_at: datetime
     reviewed_at: datetime | None
     notified_at: datetime | None
+    ai_state: str = "no_criteria"
+    ai_verdict: str | None = None
+    ai_score: int | None = None
+    ai_analyzed_at: datetime | None = None
 
 
 class RecruiterResumeDetailOut(RecruiterResumeListItemOut):
+    ai_threshold: int | None = None
+    ai_criteria_version: int | None = None
+    current_criteria_version: int = 0
+    ai_stale: bool = False
+    ai_error: str | None = None
+    ai_reasons: AiReasonsOut | None = None
     content_type: str
     file_size_bytes: int
     decision_note: str | None

@@ -117,3 +117,14 @@ def enqueue_turn_job(
     result = celery_app.send_task("app.worker.tasks.process_turn_job", args=args)
     register_job(interview_id, result.id)
     return result.id
+
+
+def enqueue_screening_job(application_id: str) -> None:
+    """이력서 제출 직후 AI 합격 판정 job을 전송한다(2026-10-14). 기능이 꺼져 있으면 아무것도 하지 않는다.
+
+    감시(watchdog) 등록은 하지 않는다 — 면접 WebSocket 과 무관하고, 유실돼도 1분 배치
+    (`screen_pending_resumes`)가 미분석 이력서를 다시 집어 든다. 브로커 예외는 호출부가 처리한다.
+    """
+    if not settings.screening_enabled:
+        return
+    celery_app.send_task("app.worker.screening_tasks.screen_resume_job", args=[str(application_id)])
