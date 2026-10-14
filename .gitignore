@@ -57,3 +57,4 @@ frontend/blob-report/
 frontend-apply/node_modules/
 frontend-apply/.next/
 frontend-apply/npm-debug.log*
+.local-run/
