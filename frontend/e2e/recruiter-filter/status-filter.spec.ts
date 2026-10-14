@@ -44,10 +44,11 @@ const rows = (page: Page) => page.locator("tbody tr");
 const select = (page: Page) => page.getByLabel("면접 상태");
 
 test.describe("상단 탭 순서", () => {
-  test("[TC-01] 이력서 검토 / 지원자 리포트 / 제출 절차 안내 / 채용담당자 추가 순서", async ({ page }) => {
+  test("[TC-01] 이력서 검토 / 면접기준 / 지원자 리포트 / 제출 절차 안내 / 채용담당자 추가 순서", async ({ page }) => {
     await open(page, DATA);
     await expect(page.locator("nav[aria-label='채용 관리 메뉴'] a")).toHaveText([
       "이력서 검토",
+      "면접기준",
       "지원자 리포트",
       "제출 절차 안내",
       "채용담당자 추가",

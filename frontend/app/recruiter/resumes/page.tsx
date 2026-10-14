@@ -19,7 +19,16 @@ import {
 } from "@/lib/api";
 import HomeLink from "@/components/HomeLink";
 import RecruiterListTabs from "@/components/RecruiterListTabs";
+import { aiBadge, formatScore } from "@/lib/screeningView.mjs";
 import styles from "../recruiter.module.css";
+
+const AI_TONE_CLASS = {
+  pass: styles["aiTag--pass"],
+  fail: styles["aiTag--fail"],
+  pending: styles["aiTag--pending"],
+  failed: styles["aiTag--failed"],
+  none: styles["aiTag--none"],
+} as const;
 
 const STATUS_LABEL: Record<RecruiterResumeListItemOut["status"], string> = {
   pending: "심사 대기",
@@ -134,6 +143,9 @@ export default function RecruiterResumesPage() {
               <th>지원자</th>
               <th>이메일</th>
               <th>상태</th>
+              <th>AI 합격상태</th>
+              <th>AI 점수</th>
+              <th>AI 점검일시</th>
               <th>제출일시</th>
               <th>심사일시</th>
               <th>안내</th>
@@ -147,6 +159,14 @@ export default function RecruiterResumesPage() {
                 <td>
                   <span className={styles.statusTag}>{STATUS_LABEL[r.status]}</span>
                 </td>
+                <td>
+                  {(() => {
+                    const b = aiBadge(r.ai_state, r.ai_verdict);
+                    return <span className={`${styles.aiTag} ${AI_TONE_CLASS[b.tone]}`}>{b.label}</span>;
+                  })()}
+                </td>
+                <td>{formatScore(r.ai_score)}</td>
+                <td>{formatDateTime(r.ai_analyzed_at ?? null)}</td>
                 <td>{formatDateTime(r.submitted_at)}</td>
                 <td>{formatDateTime(r.reviewed_at)}</td>
                 <td>{r.notified_at ? "완료" : "-"}</td>

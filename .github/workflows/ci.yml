@@ -121,4 +121,4 @@ jobs:
         run: npm run build
       - name: 통계 계산 단위 테스트 (frontend 전용)
         if: matrix.app == 'frontend'
-        run: node --experimental-strip-types --test lib/reportStats.test.mjs
+        run: node --experimental-strip-types --test lib/reportStats.test.mjs lib/screeningView.test.mjs

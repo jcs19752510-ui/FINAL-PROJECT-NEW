@@ -719,6 +719,53 @@ export interface RecruiterResumeListItemOut {
   submitted_at: string;
   reviewed_at: string | null;
   notified_at: string | null;
+  // AI 판정 필드: 구버전 백엔드 호환을 위해 모두 optional.
+  ai_state?: AiState;
+  ai_verdict?: AiVerdict | null;
+  ai_score?: number | null;
+  ai_analyzed_at?: string | null;
+}
+
+export type AiState = "no_criteria" | "pending" | "done" | "failed";
+export type AiVerdict = "pass" | "fail";
+
+export interface AiReasons {
+  summary: string;
+  criteria: { name: string; score: number; evidence: string }[];
+  strengths: string[];
+  concerns: string[];
+}
+
+export interface ScreeningCriteriaOut {
+  criteria_text: string;
+  pass_threshold: number;
+  version: number;
+  updated_at: string | null;
+  updated_by_name: string | null;
+}
+
+export function getScreeningCriteria(accessToken: string): Promise<ScreeningCriteriaOut> {
+  return request<ScreeningCriteriaOut>("/recruiter/screening-criteria", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function saveScreeningCriteria(
+  accessToken: string,
+  payload: { criteria_text: string; pass_threshold: number },
+): Promise<ScreeningCriteriaOut> {
+  return request<ScreeningCriteriaOut>("/recruiter/screening-criteria", {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function reanalyzeResume(accessToken: string, applicationId: string): Promise<RecruiterResumeDetailOut> {
+  return request<RecruiterResumeDetailOut>(`/recruiter/resumes/${applicationId}/ai-reanalyze`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
 }
 
 export interface RecruiterResumeDetailOut extends RecruiterResumeListItemOut {
@@ -726,6 +773,12 @@ export interface RecruiterResumeDetailOut extends RecruiterResumeListItemOut {
   file_size_bytes: number;
   decision_note: string | null;
   interview_schedule_note: string | null;
+  ai_threshold?: number | null;
+  ai_criteria_version?: number | null;
+  current_criteria_version?: number;
+  ai_stale?: boolean;
+  ai_error?: string | null;
+  ai_reasons?: AiReasons | null;
 }
 
 export function listRecruiterResumes(accessToken: string): Promise<RecruiterResumeListItemOut[]> {
