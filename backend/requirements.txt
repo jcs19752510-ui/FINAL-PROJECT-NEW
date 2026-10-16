@@ -43,3 +43,6 @@ tensorflow==2.21.0
 tf-keras==2.21.0
 opencv-python==5.0.0.93
 pypdf>=4.0,<7
+# 2026-10-16: Google 계정 연동 로그인(OIDC ID Token 서명·iss·aud·exp 검증, app/services/google_oidc.py).
+# 함수 안에서 지연 임포트하므로 이 라이브러리 문제가 앱 기동/기존 로그인에 영향을 주지 않는다.
+google-auth[requests]>=2.35,<3.0

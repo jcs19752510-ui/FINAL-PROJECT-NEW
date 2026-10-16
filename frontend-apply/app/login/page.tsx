@@ -6,6 +6,7 @@ import { Suspense, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ApiError, loginUser, storeAccessToken } from "@/lib/api";
 import HomeLink from "@/components/HomeLink";
+import GoogleLoginButton from "@/components/GoogleLoginButton";
 
 export default function ApplyLoginPage() {
   return (
@@ -88,6 +89,8 @@ function ApplyLoginForm() {
             {submitting ? "로그인 중..." : "로그인"}
           </button>
         </form>
+
+        <GoogleLoginButton />
 
         <div className="auth-footer">
           아직 계정이 없나요? <Link href="/register">회원가입</Link>

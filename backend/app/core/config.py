@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     # 기존처럼 초안만 보여준다(가짜 진행률 금지 — 키 없이 "발송된 척" 하지 않음).
     gmail_address: str | None = None
     gmail_app_password: str | None = None
+    # 2026-10-16(사용자 지시): Google 계정 연동 로그인(OAuth2/OIDC) — 기존 이메일/비밀번호 로그인과
+    # 나란히 놓이는 추가 방식. 기본 꺼짐(false)이고, 꺼져 있거나 아래 세 값 중 하나라도 비어 있으면
+    # `/auth/google/*` 라우터는 아예 등록되지 않아 404이며 기존 로그인에는 어떤 영향도 없다
+    # (app/api/v1/google_wiring.py). Client Secret은 코드/로그에 남기지 않고 환경변수로만 둔다.
+    google_login_enabled: bool = False
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    # Google Cloud Console의 "승인된 리디렉션 URI"와 한 글자도 다르면 안 된다.
+    # 로컬 예: http://localhost:8001/api/v1/auth/google/callback
+    google_redirect_uri: str | None = None
+    # 로그인 완료 후 되돌아갈 수 있는 프런트 오리진 허용 목록(쉼표 구분, Open Redirect 방지).
+    # 첫 번째 값이 `return_to`를 생략했을 때의 기본 복귀 대상이다.
+    google_allowed_return_origins: str = "http://localhost:3002"
 
     @property
     def cors_origin_list(self) -> list[str]:

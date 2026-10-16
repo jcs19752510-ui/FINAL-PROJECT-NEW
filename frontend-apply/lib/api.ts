@@ -81,6 +81,16 @@ export function getMe(accessToken: string): Promise<UserOut> {
   });
 }
 
+// 2026-10-16 Google 로그인: 백엔드 콜백이 심어 준 리프레시 쿠키로 액세스 토큰을 받는다(기존 /auth/refresh 그대로 사용).
+export function refreshAccessToken(): Promise<{ access_token: string; token_type: "bearer" }> {
+  return request<{ access_token: string; token_type: "bearer" }>("/auth/refresh", { method: "POST" });
+}
+
+// Google 로그인 시작 URL — 백엔드가 허용 목록의 오리진만 받아들인다(Open Redirect 방지).
+export function googleLoginStartUrl(returnOrigin: string): string {
+  return `${API_BASE_URL}/auth/google/start?return_to=${encodeURIComponent(returnOrigin)}`;
+}
+
 const ACCESS_TOKEN_KEY = "access_token";
 
 export function storeAccessToken(token: string) {

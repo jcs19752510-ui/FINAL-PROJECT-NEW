@@ -122,6 +122,14 @@ app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 
 app.include_router(auth_router, prefix="/api/v1")
+# 2026-10-16: Google 계정 연동 로그인(추가 로그인 방식). 기본 꺼짐 — 꺼져 있거나 설정이 불완전하면
+# 라우터를 등록하지 않으며(404), 어떤 오류도 기동을 막지 않는다(app/api/v1/google_wiring.py).
+try:
+    from app.api.v1.google_wiring import include_google_login
+
+    include_google_login(app)
+except Exception:  # pragma: no cover - 기존 기능 기동 보호용 최후 방어선
+    logging.getLogger(__name__).exception("Google 로그인 연결 중 오류 — 비활성 상태로 계속 기동합니다.")
 app.include_router(code_submissions_router, prefix="/api/v1")
 app.include_router(coding_problems_router, prefix="/api/v1")
 app.include_router(consents_router, prefix="/api/v1")
