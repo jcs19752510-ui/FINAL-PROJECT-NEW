@@ -5,6 +5,7 @@ nginx·openssl 이 없으면 건너뛴다. 실행: python -m pytest deploy/tests
 
 import http.client
 import json
+import os
 import shutil
 import socket
 import ssl
@@ -78,6 +79,23 @@ def gateway(tmp_path_factory):
     ):
         assert old in conf, old
         conf = conf.replace(old, new)
+    # 비루트(예: GitHub Actions 러너) 사용자는 nginx 기본 임시 폴더(/var/lib/nginx/...)에 쓸 수 없어 큰 업로드(ng09)가
+    # 500이 된다. 비루트로 실행될 때만 시험용 사본의 임시 폴더를 작업 폴더 안으로 돌린다(운영 nginx.conf 는 그대로).
+    # 루트로 실행되면 워커가 다른 사용자(www-data 등)로 내려가 기본 경로가 오히려 맞으므로 건드리지 않는다.
+    if os.geteuid() != 0:
+        temp_dirs = "".join(
+            f"    {directive} temp/{name};\n"
+            for directive, name in (
+                ("client_body_temp_path", "body"),
+                ("proxy_temp_path", "proxy"),
+                ("fastcgi_temp_path", "fastcgi"),
+                ("uwsgi_temp_path", "uwsgi"),
+                ("scgi_temp_path", "scgi"),
+            )
+        )
+        assert "http {\n" in conf
+        conf = conf.replace("http {\n", "http {\n" + temp_dirs, 1)
+        (work / "temp").mkdir()
     (work / "nginx.conf").write_text(conf, encoding="utf-8")
     (work / "logs").mkdir()
     # 인증서는 실제 스크립트로 만든다(스크립트를 작업 폴더로 복사해 그 옆 certs/ 에 생성)
